@@ -4,7 +4,7 @@ import SwiftUI
 struct AmarreApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            AppRoot()
         }
     }
 }
