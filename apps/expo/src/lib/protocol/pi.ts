@@ -70,10 +70,12 @@ export type AssistantStreamEvent = {
 
 export type ToolCall = { id: string; name: string; arguments: unknown };
 
+// pi flattens toolCall blocks on the wire: { type: 'toolCall', id, name, arguments }
+// (verified live against rpi5 amarre on 2026-04-28).
 export type AssistantContentBlock =
   | { type: 'text'; text: string }
   | { type: 'thinking'; thinking: string }
-  | { type: 'toolCall'; toolCall: ToolCall };
+  | { type: 'toolCall'; id: string; name: string; arguments: unknown };
 
 export type UserMessage = {
   role: 'user';

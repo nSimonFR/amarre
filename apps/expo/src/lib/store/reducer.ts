@@ -105,7 +105,23 @@ function reduceResponse(state: State, event: ResponseEvent): State {
   }
   if (event.command === 'get_messages' && event.data) {
     const data = event.data as GetMessagesData;
-    return { ...state, messages: data.messages || [] };
+    const messages = data.messages || [];
+    // Rehydrate toolExecs from any prior toolResult messages so historical tool
+    // outputs render after reconnect.
+    const toolExecs = new Map(state.toolExecs);
+    for (const m of messages) {
+      if (m.role === 'toolResult') {
+        toolExecs.set(m.toolCallId, {
+          toolCallId: m.toolCallId,
+          toolName: m.toolName,
+          args: undefined,
+          status: m.isError ? 'error' : 'done',
+          result: { content: m.content, details: m.details },
+          isError: m.isError,
+        });
+      }
+    }
+    return { ...state, messages, toolExecs };
   }
   return state;
 }
@@ -221,7 +237,9 @@ function reduceTurnEnd(
     const blocks: AssistantContentBlock[] = [];
     if (state.streaming.text) blocks.push({ type: 'text', text: state.streaming.text });
     if (state.streaming.thinking) blocks.push({ type: 'thinking', thinking: state.streaming.thinking });
-    for (const tc of state.streaming.toolCalls) blocks.push({ type: 'toolCall', toolCall: tc });
+    for (const tc of state.streaming.toolCalls) {
+      blocks.push({ type: 'toolCall', id: tc.id, name: tc.name, arguments: tc.arguments });
+    }
     if (blocks.length) appended.push({ role: 'assistant', content: blocks });
   }
 
