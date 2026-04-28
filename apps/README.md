@@ -6,7 +6,8 @@ Each app is its own self-contained subdirectory. The server exposes a single Web
 
 ## Subdirectories
 
-- [`ios/`](./ios/) — placeholder for the native iOS client. Empty for now.
+- [`mobile/`](./mobile/) — Expo cross-platform client (iOS + Android + web). Active. See [`mobile/PLAN.md`](./mobile/PLAN.md).
+- [`ios/`](./ios/) — placeholder for a native SwiftUI iOS client. Parked behind the Expo target; see [`ios/PLAN.md`](./ios/PLAN.md) for the original native plan.
 
 ## Adding an app
 
