@@ -155,8 +155,8 @@ function AssistantBlocks({
         if (b.type === 'text') return <Prose key={idx} text={b.text} />;
         if (b.type === 'thinking') return null;
         if (b.type === 'toolCall') {
-          const exec = toolExecs.get(b.toolCall.id);
-          return <ToolBlock key={idx} call={b.toolCall} exec={exec} />;
+          const exec = toolExecs.get(b.id);
+          return <ToolBlock key={idx} call={{ id: b.id, name: b.name, arguments: b.arguments }} exec={exec} />;
         }
         return null;
       })}
