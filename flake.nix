@@ -1,5 +1,5 @@
 {
-  description = "pi-mobile — remote-session WS bridge for pi-coding-agent";
+  description = "amarre — tailnet-only WebSocket harness for CLI coding agents (pi, claude-code, …)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -16,28 +16,29 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           pi = llm-agents.packages.${system}.pi;
-          bridge = pkgs.writeShellApplication {
-            name = "pi-mobile-bridge";
+          src = ./.;
+          server = pkgs.writeShellApplication {
+            name = "amarre-server";
             runtimeInputs = [ pkgs.bun pi ];
             text = ''
               export PI_BIN="''${PI_BIN:-${pi}/bin/pi}"
-              export PI_MOBILE_GATE="''${PI_MOBILE_GATE:-${./bridge/permission-gate.ts}}"
-              exec bun run ${./bridge/bridge.ts} "$@"
+              export AMARRE_AGENT="''${AMARRE_AGENT:-pi}"
+              exec bun run ${src}/server/server.ts "$@"
             '';
           };
         in {
-          inherit bridge;
-          default = bridge;
+          inherit server;
+          default = server;
         });
 
-      nixosModules.pi-mobile = import ./module.nix self;
-      nixosModules.default = self.nixosModules.pi-mobile;
+      nixosModules.amarre = import ./module.nix self;
+      nixosModules.default = self.nixosModules.amarre;
 
       checks = forAllSystems (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
         in {
-          tests = pkgs.runCommand "pi-mobile-tests" {
+          tests = pkgs.runCommand "amarre-tests" {
             buildInputs = [ pkgs.bun pkgs.bash pkgs.coreutils ];
           } ''
             cp -r ${./.} src

@@ -1,16 +1,25 @@
 self:
 { config, lib, pkgs, ... }:
 let
-  cfg = config.services.pi-mobile;
-  bridgePkg = self.packages.${pkgs.stdenv.hostPlatform.system}.bridge;
+  cfg = config.services.amarre;
+  serverPkg = self.packages.${pkgs.stdenv.hostPlatform.system}.server;
 in {
-  options.services.pi-mobile = {
-    enable = lib.mkEnableOption "pi-coding-agent remote control bridge";
+  options.services.amarre = {
+    enable = lib.mkEnableOption "amarre — WS harness for CLI coding agents";
+
+    agent = lib.mkOption {
+      type = lib.types.str;
+      default = "pi";
+      description = ''
+        Which agent adapter to load at startup. Resolves to
+        `agents/<name>/adapter.ts` inside the amarre source tree.
+      '';
+    };
 
     port = lib.mkOption {
       type = lib.types.port;
       default = 8341;
-      description = "TCP port the WebSocket bridge listens on (loopback only).";
+      description = "TCP port the WebSocket server listens on (loopback only).";
     };
 
     host = lib.mkOption {
@@ -22,27 +31,28 @@ in {
     user = lib.mkOption {
       type = lib.types.str;
       description = ''
-        User the bridge (and pi child process) runs as. Inherits the user's
-        ~/.pi/agent/{settings.json,models.json,extensions/*} config.
+        User the server (and agent child process) runs as. Inherits the
+        user's home-dir agent config (e.g. `~/.pi/agent/`).
       '';
     };
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = bridgePkg;
-      description = "The pi-mobile bridge package.";
+      default = serverPkg;
+      description = "The amarre server package.";
     };
   };
 
   config = lib.mkIf cfg.enable {
-    systemd.services.pi-mobile = {
-      description = "pi-coding-agent remote control bridge";
+    systemd.services.amarre = {
+      description = "amarre — WS harness for CLI coding agents";
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
       stopIfChanged = true;
       environment = {
-        PI_MOBILE_PORT = toString cfg.port;
-        PI_MOBILE_HOST = cfg.host;
+        AMARRE_AGENT = cfg.agent;
+        AMARRE_PORT = toString cfg.port;
+        AMARRE_HOST = cfg.host;
         HOME = "/home/${cfg.user}";
       };
       serviceConfig = {
@@ -50,7 +60,7 @@ in {
         User = cfg.user;
         Group = "users";
         WorkingDirectory = "/home/${cfg.user}";
-        ExecStart = "${cfg.package}/bin/pi-mobile-bridge";
+        ExecStart = "${cfg.package}/bin/amarre-server";
         Restart = "on-failure";
         RestartSec = "5s";
       };
