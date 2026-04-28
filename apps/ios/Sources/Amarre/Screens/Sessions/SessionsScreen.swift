@@ -8,6 +8,22 @@ struct SessionsScreen: View {
     var onTapNew: () -> Void = {}
     var onDebug: (DebugRoute) -> Void = { _ in }
 
+    private var filteredToday: [SessionItem] { apply(filter, to: MockSession.today) }
+    private var filteredYesterday: [SessionItem] { apply(filter, to: MockSession.yesterday) }
+
+    private func apply(_ f: SessionFilter, to items: [SessionItem]) -> [SessionItem] {
+        switch f {
+        case .all:
+            items
+        case .live:
+            items.filter { $0.state == .running || $0.state == .run }
+        case .waiting:
+            items.filter { $0.state == .waiting || $0.state == .warn }
+        case .done:
+            items.filter { $0.state == .done || $0.state == .ok }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             AmLargeHeader(
@@ -20,37 +36,44 @@ struct SessionsScreen: View {
                         .onLongPressGesture { showDebug = true }
                 }
             } trailing: {
-                HStack(spacing: 8) {
-                    HeaderPill { } content: {
-                        AmIcon(name: .search, size: 18)
-                    }
-                    Button(action: onTapNew) {
-                        AmIcon(name: .plus, size: 18, color: .white)
-                    }
-                    .buttonStyle(.amCircle())
+                Button(action: onTapNew) {
+                    AmIcon(name: .plus, size: 18, color: .white)
                 }
+                .buttonStyle(.amCircle())
             }
 
             SessionFilterBar(selected: $filter)
 
             ScrollView {
                 LazyVStack(spacing: 0, pinnedViews: []) {
-                    SectionLabel(label: "TODAY")
-                    ForEach(MockSession.today) { item in
-                        SessionCard(item: item) {
-                            onTapSession(item)
+                    if !filteredToday.isEmpty {
+                        SectionLabel(label: "TODAY")
+                        ForEach(filteredToday) { item in
+                            SessionCard(item: item) {
+                                onTapSession(item)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 8)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 8)
                     }
 
-                    SectionLabel(label: "YESTERDAY")
-                    ForEach(MockSession.yesterday) { item in
-                        SessionCard(item: item) {
-                            onTapSession(item)
+                    if !filteredYesterday.isEmpty {
+                        SectionLabel(label: "YESTERDAY")
+                        ForEach(filteredYesterday) { item in
+                            SessionCard(item: item) {
+                                onTapSession(item)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 8)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 8)
+                    }
+
+                    if filteredToday.isEmpty && filteredYesterday.isEmpty {
+                        Text("no sessions match this filter")
+                            .font(.amSans(Tokens.FontSize.body))
+                            .foregroundStyle(Color.amInk3)
+                            .padding(.top, 60)
+                            .frame(maxWidth: .infinity)
                     }
 
                     Color.clear.frame(height: 100)
