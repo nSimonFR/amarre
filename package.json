@@ -1,0 +1,15 @@
+{
+  "name": "pi-mobile",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run bridge/bridge.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/ws": "^8.5.13",
+    "ws": "^8.18.0"
+  }
+}
