@@ -17,7 +17,7 @@ struct AmChip<Leading: View>: View {
             if let count {
                 Text("\(count)")
                     .font(.amSans(12, weight: .medium))
-                    .foregroundStyle(.amInk3)
+                    .foregroundStyle(Color.amInk3)
             }
         }
         .padding(.horizontal, paddingH)

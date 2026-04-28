@@ -77,7 +77,7 @@ struct ChatScreen: View {
             HStack(spacing: 8) {
                 Text(label)
                     .font(.amSans(Tokens.FontSize.sm))
-                    .foregroundStyle(.amInk3)
+                    .foregroundStyle(Color.amInk3)
                 StreamShimmer(width: 80, height: 14)
             }
         }

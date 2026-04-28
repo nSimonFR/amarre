@@ -9,16 +9,16 @@ struct ToolRow: View {
             AmIcon(name: data.icon, size: 14, color: .amInk2)
             Text(data.label)
                 .font(.amSans(Tokens.FontSize.sm, weight: .semibold))
-                .foregroundStyle(.amInk)
+                .foregroundStyle(Color.amInk)
             Text(data.path)
                 .font(.amMono(Tokens.FontSize.sm))
-                .foregroundStyle(.amInk3)
+                .foregroundStyle(Color.amInk3)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let meta = data.meta {
                 Text(meta)
                     .font(.amSans(Tokens.FontSize.sm))
-                    .foregroundStyle(.amInk3)
+                    .foregroundStyle(Color.amInk3)
             }
         }
         .padding(.horizontal, 12)

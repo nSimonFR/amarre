@@ -23,11 +23,11 @@ struct StreamingDemoScreen: View {
 
                 Text("streaming demo")
                     .font(.amSans(Tokens.FontSize.cardTitle, weight: .semibold))
-                    .foregroundStyle(.amInk)
+                    .foregroundStyle(Color.amInk)
 
                 Text("real animations are driven by Layer-4 message_update events from the WS bridge. this view is a placeholder until the networking layer lands — see apps/ios/PLAN.md phase P5.")
                     .font(.amSans(Tokens.FontSize.body))
-                    .foregroundStyle(.amInk2)
+                    .foregroundStyle(Color.amInk2)
                     .multilineTextAlignment(.center)
                     .lineSpacing(2)
                     .padding(.horizontal, 32)
@@ -36,7 +36,7 @@ struct StreamingDemoScreen: View {
                     StatusDot(state: .run)
                     Text("idle animations are live, though")
                         .font(.amMono(Tokens.FontSize.xs))
-                        .foregroundStyle(.amInk3)
+                        .foregroundStyle(Color.amInk3)
                     StreamShimmer(width: 60, height: 12)
                 }
                 .padding(.top, 8)

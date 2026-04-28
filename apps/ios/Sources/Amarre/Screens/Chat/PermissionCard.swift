@@ -44,7 +44,7 @@ struct PermissionCard: View {
                 Text(request.kind)
                     .font(.amMono(Tokens.FontSize.xs, weight: .semibold))
                     .tracking(Tokens.Track.monoCaps)
-                    .foregroundStyle(.amInk3)
+                    .foregroundStyle(Color.amInk3)
                     .textCase(.uppercase)
 
                 (Text(request.titleStatic)
@@ -52,12 +52,12 @@ struct PermissionCard: View {
                     +
                     Text(request.titleMono)
                         .font(.amMono(Tokens.FontSize.cardTitle, weight: .medium)))
-                    .foregroundStyle(.amInk)
+                    .foregroundStyle(Color.amInk)
             }
             Spacer()
             Text(request.timeoutLabel)
                 .font(.amMono(Tokens.FontSize.xs))
-                .foregroundStyle(.amInk3)
+                .foregroundStyle(Color.amInk3)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(Capsule().fill(Color.amBgSunk))
@@ -74,11 +74,11 @@ struct PermissionCard: View {
                 HStack(spacing: 10) {
                     Text(line.sigil.rawValue)
                         .font(.amMono(Tokens.FontSize.xs, weight: .semibold))
-                        .foregroundStyle(.amOk)
+                        .foregroundStyle(Color.amOk)
                         .frame(width: 8, alignment: .leading)
                     Text(line.text)
                         .font(.amMono(Tokens.FontSize.xs))
-                        .foregroundStyle(.amInk)
+                        .foregroundStyle(Color.amInk)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.horizontal, 12)
@@ -137,7 +137,7 @@ struct PermissionCard: View {
                     Text(request.host)
                         .font(.amMono(11.5))
                         .foregroundColor(.amInk))
-                    .foregroundStyle(.amInk2)
+                    .foregroundStyle(Color.amInk2)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)

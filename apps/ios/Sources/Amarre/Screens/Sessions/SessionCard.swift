@@ -14,13 +14,13 @@ struct SessionCard: View {
                         HStack(alignment: .center, spacing: 8) {
                             Text(item.title)
                                 .font(.amSans(Tokens.FontSize.cardTitle, weight: .semibold))
-                                .foregroundStyle(.amInk)
+                                .foregroundStyle(Color.amInk)
                                 .lineLimit(1)
                             Spacer(minLength: 0)
                             if let badge = item.badge {
                                 Text(badge)
                                     .font(.amSans(10, weight: .semibold))
-                                    .foregroundStyle(.amWarn)
+                                    .foregroundStyle(Color.amWarn)
                                     .padding(.horizontal, 7)
                                     .padding(.vertical, 2)
                                     .background(Capsule().fill(Color.amWarnBg))
@@ -28,26 +28,26 @@ struct SessionCard: View {
                             } else {
                                 Text(item.time)
                                     .font(.amSans(Tokens.FontSize.xs))
-                                    .foregroundStyle(.amInk3)
+                                    .foregroundStyle(Color.amInk3)
                             }
                         }
                         HStack(spacing: 6) {
                             Text(item.host)
                                 .font(.amMono(Tokens.FontSize.xs))
-                                .foregroundStyle(.amInk3)
+                                .foregroundStyle(Color.amInk3)
                             Text("·")
-                                .foregroundStyle(.amInk3.opacity(0.4))
+                                .foregroundStyle(Color.amInk3.opacity(0.4))
                             AmIcon(name: .branch, size: 11, color: .amInk3)
                             Text(item.branch)
                                 .font(.amMono(Tokens.FontSize.xs))
-                                .foregroundStyle(.amInk3)
+                                .foregroundStyle(Color.amInk3)
                         }
                     }
                 }
 
                 Text(item.preview)
                     .font(.amSans(Tokens.FontSize.base))
-                    .foregroundStyle(.amInk2)
+                    .foregroundStyle(Color.amInk2)
                     .lineLimit(1)
                     .padding(.leading, 44)
                     .padding(.top, -2)

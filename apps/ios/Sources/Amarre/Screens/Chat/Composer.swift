@@ -18,7 +18,7 @@ struct Composer: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(placeholder)
                     .font(.amSans(Tokens.FontSize.body))
-                    .foregroundStyle(.amInk3)
+                    .foregroundStyle(Color.amInk3)
                     .padding(.top, 4)
                     .padding(.horizontal, 4)
 

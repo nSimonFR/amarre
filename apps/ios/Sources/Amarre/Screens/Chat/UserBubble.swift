@@ -8,7 +8,7 @@ struct UserBubble: View {
             Spacer(minLength: 60)
             Text(text)
                 .font(.amSans(Tokens.FontSize.body))
-                .foregroundStyle(.amInk)
+                .foregroundStyle(Color.amInk)
                 .lineSpacing(2)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)

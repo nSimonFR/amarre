@@ -52,14 +52,14 @@ private struct AgentSummaryMessage: View {
             + codePart("origin")
             + Text(". Want me to open the PR?"))
             .font(.amSans(Tokens.FontSize.body))
-            .foregroundStyle(.amInk)
+            .foregroundStyle(Color.amInk)
             .lineSpacing(3)
     }
 
     private func codePart(_ s: String) -> Text {
         Text(s)
             .font(.amMono(Tokens.FontSize.sm))
-            .foregroundStyle(.amInk)
+            .foregroundStyle(Color.amInk)
     }
 }
 
@@ -84,12 +84,12 @@ private struct PRCard: View {
                 Text(pr.repo)
                     .font(.amMono(Tokens.FontSize.xs, weight: .semibold))
                     .tracking(Tokens.Track.monoCaps)
-                    .foregroundStyle(.amInk3)
+                    .foregroundStyle(Color.amInk3)
             }
             HStack(spacing: 8) {
                 Text(pr.sourceBranch)
                     .font(.amMono(Tokens.FontSize.sm, weight: .semibold))
-                    .foregroundStyle(.amAccent)
+                    .foregroundStyle(Color.amAccent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color.amAccentSoft))
@@ -98,7 +98,7 @@ private struct PRCard: View {
 
                 Text(pr.targetBranch)
                     .font(.amMono(Tokens.FontSize.sm))
-                    .foregroundStyle(.amInk2)
+                    .foregroundStyle(Color.amInk2)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color.amBgSunk))
@@ -116,17 +116,17 @@ private struct PRCard: View {
                 Text("\(pr.fileCount) files · \(pr.commitCount) commits")
                     .font(.amMono(Tokens.FontSize.xs))
                     .tracking(Tokens.Track.monoCaps)
-                    .foregroundStyle(.amInk3)
+                    .foregroundStyle(Color.amInk3)
                 Spacer()
                 HStack(spacing: 4) {
                     Text("+\(pr.totalAdded)")
                         .font(.amMono(Tokens.FontSize.xs))
-                        .foregroundStyle(.amOk)
+                        .foregroundStyle(Color.amOk)
                     Text("·")
-                        .foregroundStyle(.amInk3)
+                        .foregroundStyle(Color.amInk3)
                     Text("−\(pr.totalRemoved)")
                         .font(.amMono(Tokens.FontSize.xs))
-                        .foregroundStyle(.amErr)
+                        .foregroundStyle(Color.amErr)
                 }
             }
 
@@ -136,16 +136,16 @@ private struct PRCard: View {
                         AmIcon(name: .file, size: 12, color: .amInk3)
                         Text(f.path)
                             .font(.amMono(Tokens.FontSize.sm))
-                            .foregroundStyle(.amInk2)
+                            .foregroundStyle(Color.amInk2)
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("+\(f.added)")
                             .font(.amMono(10))
-                            .foregroundStyle(.amOk)
+                            .foregroundStyle(Color.amOk)
                         if f.removed > 0 {
                             Text("−\(f.removed)")
                                 .font(.amMono(10))
-                                .foregroundStyle(.amErr)
+                                .foregroundStyle(Color.amErr)
                         }
                     }
                     .padding(.vertical, 4)
@@ -165,10 +165,10 @@ private struct PRCard: View {
             Text("TITLE")
                 .font(.amMono(Tokens.FontSize.xs))
                 .tracking(Tokens.Track.monoCaps)
-                .foregroundStyle(.amInk3)
+                .foregroundStyle(Color.amInk3)
             Text(pr.title)
                 .font(.amSans(Tokens.FontSize.body, weight: .medium))
-                .foregroundStyle(.amInk)
+                .foregroundStyle(Color.amInk)
                 .lineSpacing(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -204,11 +204,11 @@ private struct PRCard: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("PR #\(prNumber) opened")
                             .font(.amSans(Tokens.FontSize.base, weight: .semibold))
-                            .foregroundStyle(.amInk)
+                            .foregroundStyle(Color.amInk)
                         if let url = pr.prURL {
                             Text(url)
                                 .font(.amMono(Tokens.FontSize.xs))
-                                .foregroundStyle(.amInk3)
+                                .foregroundStyle(Color.amInk3)
                         }
                     }
                     Spacer()

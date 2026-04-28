@@ -19,11 +19,11 @@ struct AmLargeHeader<Leading: View, Trailing: View>: View {
                 Text(title)
                     .font(.amSans(Tokens.FontSize.h1, weight: .bold))
                     .tracking(Tokens.Track.h1)
-                    .foregroundStyle(.amInk)
+                    .foregroundStyle(Color.amInk)
                 if let subtitle {
                     Text(subtitle)
                         .font(.amSans(Tokens.FontSize.body))
-                        .foregroundStyle(.amInk3)
+                        .foregroundStyle(Color.amInk3)
                 }
             }
         }
@@ -45,11 +45,11 @@ struct AmSubHeader<Leading: View, Trailing: View>: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.amSans(Tokens.FontSize.cardTitle, weight: .semibold))
-                    .foregroundStyle(.amInk)
+                    .foregroundStyle(Color.amInk)
                 if let subtitle {
                     Text(subtitle)
                         .font(.amMono(Tokens.FontSize.xs))
-                        .foregroundStyle(.amInk3)
+                        .foregroundStyle(Color.amInk3)
                 }
             }
             Spacer(minLength: 0)
@@ -72,7 +72,7 @@ struct StatusStrip: View {
             StatusDot(state: state)
             Text(label)
                 .font(.amSans(Tokens.FontSize.sm))
-                .foregroundStyle(.amInk2)
+                .foregroundStyle(Color.amInk2)
             Spacer(minLength: 0)
             ModePill(mode: mode)
         }

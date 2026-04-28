@@ -19,7 +19,7 @@ struct AgentMessage: View {
         case .paragraph(let inlines):
             renderInlines(inlines)
                 .font(.amSans(Tokens.FontSize.body))
-                .foregroundStyle(.amInk)
+                .foregroundStyle(Color.amInk)
                 .lineSpacing(3)
         case .bulletList(let items):
             VStack(alignment: .leading, spacing: 6) {
@@ -27,10 +27,10 @@ struct AgentMessage: View {
                     HStack(alignment: .top, spacing: 8) {
                         Text("•")
                             .font(.amSans(Tokens.FontSize.body))
-                            .foregroundStyle(.amInk2)
+                            .foregroundStyle(Color.amInk2)
                         renderInlines(line)
                             .font(.amSans(Tokens.FontSize.body))
-                            .foregroundStyle(.amInk)
+                            .foregroundStyle(Color.amInk)
                             .lineSpacing(3)
                     }
                 }
@@ -47,7 +47,7 @@ struct AgentMessage: View {
             case .code(let s):
                 acc + Text(s)
                     .font(.amMono(Tokens.FontSize.sm))
-                    .foregroundStyle(.amInk)
+                    .foregroundStyle(Color.amInk)
             }
         }
     }

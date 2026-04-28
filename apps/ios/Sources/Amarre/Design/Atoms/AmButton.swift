@@ -33,7 +33,7 @@ struct AmGhostButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.amSans(15, weight: .semibold))
-            .foregroundStyle(.amInk2)
+            .foregroundStyle(Color.amInk2)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
             .background(

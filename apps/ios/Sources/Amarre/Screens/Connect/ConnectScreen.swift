@@ -34,20 +34,20 @@ struct ConnectScreen: View {
                     Text("where does ")
                         .font(.amSans(Tokens.FontSize.h1, weight: .bold))
                         .tracking(Tokens.Track.h1)
-                        .foregroundStyle(.amInk)
+                        .foregroundStyle(Color.amInk)
                     Text("amarre")
                         .font(.amSerif(Tokens.FontSize.h1).italic())
-                        .foregroundStyle(.amAccent)
+                        .foregroundStyle(Color.amAccent)
                     Text(" live?")
                         .font(.amSans(Tokens.FontSize.h1, weight: .bold))
                         .tracking(Tokens.Track.h1)
-                        .foregroundStyle(.amInk)
+                        .foregroundStyle(Color.amInk)
                 }
                 .padding(.top, 24)
 
                 Text("point this app at the machine running amarre. you can scan a QR or type the host directly.")
                     .font(.amSans(Tokens.FontSize.cardTitle))
-                    .foregroundStyle(.amInk2)
+                    .foregroundStyle(Color.amInk2)
                     .lineSpacing(2)
                     .padding(.top, 8)
 
@@ -83,11 +83,11 @@ struct ConnectScreen: View {
                         AmIcon(name: .qr, size: 16, color: .amInk2)
                         Text("or scan QR from ")
                             .font(.amSans(Tokens.FontSize.base))
-                            .foregroundStyle(.amInk2)
+                            .foregroundStyle(Color.amInk2)
                             +
                         Text("amarre setup")
                             .font(.amMono(Tokens.FontSize.sm))
-                            .foregroundStyle(.amInk2)
+                            .foregroundStyle(Color.amInk2)
                     }
                 }
                 .buttonStyle(.plain)
@@ -111,12 +111,12 @@ private struct ConnectField: View {
             Text(label)
                 .font(.amMono(Tokens.FontSize.micro, weight: .semibold))
                 .tracking(Tokens.Track.monoLabel)
-                .foregroundStyle(.amInk3)
+                .foregroundStyle(Color.amInk3)
             Text(value)
                 .font(mono
                     ? .amMono(big ? Tokens.FontSize.field : 16, weight: .medium)
                     : .amSans(big ? Tokens.FontSize.field : 16, weight: .medium))
-                .foregroundStyle(.amInk)
+                .foregroundStyle(Color.amInk)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
