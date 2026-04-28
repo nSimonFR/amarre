@@ -13,6 +13,10 @@ in {
       description = ''
         Which agent adapter to load at startup. Resolves to
         `agents/<name>/adapter.ts` inside the amarre source tree.
+
+        Built-in adapters: `pi` (default), `claude-code`. The flake's
+        server package brings both `pi` and `claude` onto PATH, so
+        switching agents is a runtime concern only.
       '';
     };
 

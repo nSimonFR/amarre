@@ -29,6 +29,7 @@ The server picks an adapter via:
 ## Subdirectories
 
 - [`pi/`](./pi/) — adapter for [`@mariozechner/pi-coding-agent`](https://github.com/badlogic/pi-mono). Spawns `pi --mode rpc -e <permission-gate>`. Bundles a `permission-gate.ts` extension that surfaces every `tool_call` as an `extension_ui_request` the connected client must approve.
+- [`claude-code/`](./claude-code/) — adapter for Anthropic's [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI. Spawns `claude -p --input-format stream-json --output-format stream-json --verbose --dangerously-skip-permissions`. Layer 4 on the wire is Claude Code's own stream-json schema (different from pi's RPC). v1 has no remote permission gate — runs with skip-permissions and trusts the tailnet ACL.
 
 ## Adding an agent
 
