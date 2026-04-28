@@ -13,7 +13,7 @@ Status: **v0 — hello-world only**. See [`PLAN.md`](./PLAN.md) for the full roa
 ## Run on web
 
 ```sh
-cd apps/mobile
+cd apps/expo
 bun install
 bun run web   # serves at http://localhost:8081
 ```
@@ -37,6 +37,6 @@ app/
   _layout.tsx     # expo-router root stack
   index.tsx       # the "hello, amarre" screen
 app.json          # Expo config (name/slug = "amarre")
-package.json      # name = "amarre-mobile"
+package.json      # name = "amarre-expo"
 tsconfig.json
 ```
