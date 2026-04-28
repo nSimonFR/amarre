@@ -13,12 +13,13 @@ type Route = {
   label: string;
   hint: string;
   icon: IconName;
+  live?: boolean;
 };
 
 const ROUTES: Route[] = [
+  { href: '/connect', label: 'Connect', hint: 'enter amarre URL', icon: 'cloud', live: true },
+  { href: '/chat', label: 'Chat', hint: 'live session', icon: 'edit', live: true },
   { href: '/sessions', label: 'Sessions', hint: 'list of active and recent sessions', icon: 'menu' },
-  { href: '/chat', label: 'Chat', hint: 'active session, prose + tool rows', icon: 'edit' },
-  { href: '/connect', label: 'Connect', hint: 'wizard step 1 of 3', icon: 'cloud' },
   { href: '/permission', label: 'Permission', hint: 'inline gate card', icon: 'shield' },
   { href: '/pr', label: 'PR / Result', hint: 'completion summary', icon: 'git' },
   { href: '/streaming', label: 'Streaming', hint: '14s hi-fi animation loop', icon: 'sparkle' },
@@ -57,14 +58,29 @@ export default function Hub() {
               <View
                 style={[
                   styles.iconBox,
-                  { backgroundColor: t.accentSoft, borderRadius: radii.sm },
+                  { backgroundColor: r.live ? t.accentSoft : t.bgSunk, borderRadius: radii.sm },
                 ]}>
-                <Icon name={r.icon} size={18} color={t.accent} />
+                <Icon name={r.icon} size={18} color={r.live ? t.accent : t.ink3} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={{ fontFamily: fonts.sansSemiBold, fontSize: 15, color: t.ink }}>
-                  {r.label}
-                </Text>
+                <View style={styles.titleRow}>
+                  <Text style={{ fontFamily: fonts.sansSemiBold, fontSize: 15, color: t.ink }}>
+                    {r.label}
+                  </Text>
+                  {r.live ? (
+                    <View style={[styles.liveTag, { backgroundColor: t.accent }]}>
+                      <Text style={{ fontFamily: fonts.monoSemiBold, fontSize: 9, color: '#fff', letterSpacing: 0.6 }}>
+                        LIVE
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.demoTag, { borderColor: t.line }]}>
+                      <Text style={{ fontFamily: fonts.monoSemiBold, fontSize: 9, color: t.ink3, letterSpacing: 0.6 }}>
+                        DEMO
+                      </Text>
+                    </View>
+                  )}
+                </View>
                 <Text style={{ fontFamily: fonts.sans, fontSize: 12, color: t.ink3, marginTop: 2 }}>
                   {r.hint}
                 </Text>
@@ -75,7 +91,7 @@ export default function Hub() {
         ))}
       </View>
 
-      <Text style={[styles.foot, { color: t.ink3 }]}>amarre · feat/expo-design</Text>
+      <Text style={[styles.foot, { color: t.ink3 }]}>amarre · feat/expo-wire</Text>
     </ScrollView>
   );
 }
@@ -102,6 +118,22 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  liveTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 3,
+  },
+  demoTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 3,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   foot: {
     textAlign: 'center',
