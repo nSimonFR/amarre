@@ -77,4 +77,21 @@ extension Color {
         light: 0xEF5D5D, alphaLight: 0.12,
         dark: 0xEF5D5D, alphaDark: 0.14
     )
+
+    static let amShadowNear = Color(
+        light: 0x141419, alphaLight: 0.04,
+        dark: 0x000000, alphaDark: 0.40
+    )
+    static let amShadowFar = Color(
+        light: 0x141419, alphaLight: 0.06,
+        dark: 0x000000, alphaDark: 0.30
+    )
+    static let amShadowLiftNear = Color(
+        light: 0x141419, alphaLight: 0.05,
+        dark: 0x000000, alphaDark: 0.50
+    )
+    static let amShadowLiftFar = Color(
+        light: 0x141419, alphaLight: 0.08,
+        dark: 0x000000, alphaDark: 0.50
+    )
 }
