@@ -1,9 +1,14 @@
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { AmAvatar } from '../src/design/atoms/AmAvatar';
 import { AmMark } from '../src/design/atoms/AmMark';
 import { AmWordmark } from '../src/design/atoms/AmWordmark';
+import { GlassPill } from '../src/design/atoms/GlassPill';
+import { HeaderPill } from '../src/design/atoms/HeaderPill';
 import { Icon, type IconName } from '../src/design/atoms/Icon';
+import { ModePill } from '../src/design/atoms/ModePill';
 import { StatusDot } from '../src/design/atoms/StatusDot';
+import { StatusOrb } from '../src/design/atoms/StatusOrb';
 import { fonts, sizes } from '../src/design/tokens/typography';
 import { radii } from '../src/design/tokens/radii';
 import { useTheme } from '../src/design/theme/useTheme';
@@ -22,6 +27,45 @@ export default function DemoIndex() {
       <View style={styles.head}>
         <AmMark size={28} color={t.accent} />
         <AmWordmark size={28} color={t.ink} />
+      </View>
+
+      <Text style={[styles.label, { color: t.ink3, fontFamily: fonts.monoSemiBold }]}>
+        AVATAR / ORBS / PILLS
+      </Text>
+      <View style={[styles.row, { gap: 16, alignItems: 'flex-end' }]}>
+        <Cell label="avatar" t={t}>
+          <AmAvatar size={32} />
+        </Cell>
+        <Cell label="halo" t={t}>
+          <AmAvatar size={32} halo />
+        </Cell>
+        <Cell label="run" t={t}>
+          <StatusOrb state="running" />
+        </Cell>
+        <Cell label="ok" t={t}>
+          <StatusOrb state="ok" />
+        </Cell>
+        <Cell label="warn" t={t}>
+          <StatusOrb state="waiting" />
+        </Cell>
+        <Cell label="err" t={t}>
+          <StatusOrb state="err" />
+        </Cell>
+      </View>
+      <View style={[styles.row, { gap: 12, alignItems: 'center', marginTop: 8 }]}>
+        <ModePill mode="code" />
+        <ModePill mode="plan" />
+        <HeaderPill>
+          <Icon name="search" size={18} color={t.ink2} />
+        </HeaderPill>
+        <HeaderPill>
+          <Icon name="settings" size={18} color={t.ink2} />
+        </HeaderPill>
+        <GlassPill style={{ paddingHorizontal: 14, paddingVertical: 10 }} radius={radii.md}>
+          <Text style={{ fontFamily: fonts.sansMedium, color: t.ink, fontSize: 13 }}>
+            Glass surface
+          </Text>
+        </GlassPill>
       </View>
 
       <Text style={[styles.label, { color: t.ink3, fontFamily: fonts.monoSemiBold }]}>
