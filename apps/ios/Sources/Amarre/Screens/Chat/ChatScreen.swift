@@ -3,10 +3,11 @@ import SwiftUI
 struct ChatScreen: View {
     var session: ChatSessionData = MockChat.permissionGate
     var onBack: () -> Void = {}
-    var onPermissionAllow: () -> Void = {}
 
     @State private var mode: AgentMode = .code
     @State private var permissionResolution: PermissionCard.Resolution = .pending
+    @State private var pr: PRSummary = MockPR.unopened
+    @State private var showPR = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,26 +27,33 @@ struct ChatScreen: View {
             StatusStrip(state: session.status, label: session.statusLabel, mode: mode)
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 18) {
                     ForEach(session.turns) { turn in
                         renderTurn(turn)
                     }
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
-                .padding(.bottom, 20)
+                .padding(.bottom, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .defaultScrollAnchor(.bottom)
-
-            Composer(
-                mode: $mode,
-                working: session.working,
-                placeholderOverride: session.composerPlaceholder
-            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.amBg.ignoresSafeArea())
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                PRBar(pr: pr) { showPR = true }
+                Composer(
+                    mode: $mode,
+                    working: session.working,
+                    placeholderOverride: session.composerPlaceholder
+                )
+            }
+        }
+        .sheet(isPresented: $showPR) {
+            PRSheet(pr: $pr)
+        }
         .onAppear {
             mode = session.mode
             permissionResolution = .pending
@@ -89,7 +97,7 @@ struct ChatScreen: View {
         permissionResolution = .allowed
         Task {
             try? await Task.sleep(nanoseconds: 200_000_000)
-            await MainActor.run { onPermissionAllow() }
+            await MainActor.run { showPR = true }
         }
     }
 

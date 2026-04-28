@@ -4,7 +4,6 @@ enum Route: Hashable {
     case connect
     case empty
     case chat(UUID)
-    case pr(UUID)
     case errorState
     case streamingDemo
 }
@@ -34,7 +33,6 @@ struct AppRoot: View {
             .navigationDestination(for: Route.self) { route in
                 destination(for: route)
                     .toolbar(.hidden, for: .navigationBar)
-                    .navigationBarBackButtonHidden(true)
             }
         }
     }
@@ -55,13 +53,7 @@ struct AppRoot: View {
             )
 
         case .chat:
-            ChatScreen(
-                onBack: { pop() },
-                onPermissionAllow: { path.append(Route.pr(UUID())) }
-            )
-
-        case .pr:
-            PRScreen(onBack: { pop() })
+            ChatScreen(onBack: { pop() })
 
         case .errorState:
             ErrorScreen(onBack: { pop() }, onRetry: { pop() })

@@ -63,7 +63,7 @@ struct Composer: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
-        .padding(.bottom, 32)
+        .padding(.bottom, 8)
         .background(
             LinearGradient(
                 colors: [Color.amBg, Color.amBg.opacity(0.6)],

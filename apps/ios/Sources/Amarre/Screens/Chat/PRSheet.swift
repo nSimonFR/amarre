@@ -1,71 +1,45 @@
 import SwiftUI
 
-struct PRScreen: View {
-    @State private var pr: PRSummary = MockPR.unopened
-    @State private var mode: AgentMode = .code
-    var onBack: () -> Void = {}
+struct PRSheet: View {
+    @Binding var pr: PRSummary
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
-            AmSubHeader(
-                title: "Permission gate UX",
-                subtitle: "rpi5:nic-os · feat/perm"
-            ) {
-                HeaderPill(action: onBack) {
-                    AmIcon(name: .back, size: 20)
+            HStack {
+                AmIcon(name: .git, size: 14, color: .amInk2)
+                Text("pull request")
+                    .font(.amMono(Tokens.FontSize.xs, weight: .semibold))
+                    .tracking(Tokens.Track.monoCaps)
+                    .foregroundStyle(Color.amInk2)
+                    .textCase(.uppercase)
+                Spacer()
+                Button {
+                    dismiss()
+                } label: {
+                    AmIcon(name: .x, size: 18, color: .amInk2)
+                        .frame(width: 36, height: 36)
                 }
-            } trailing: {
-                HeaderPill { } content: {
-                    AmIcon(name: .more, size: 18)
-                }
+                .buttonStyle(.plain)
             }
-
-            StatusStrip(state: .ok, label: "ready to ship", mode: mode)
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    AgentSummaryMessage()
-                    PRCard(pr: pr) {
-                        pr = MockPR.opened
-                    }
-                    .onLongPressGesture {
-                        pr = pr.opened ? MockPR.unopened : MockPR.opened
-                    }
+                PRCard(pr: pr) {
+                    pr = MockPR.opened
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
             }
-            .defaultScrollAnchor(.bottom)
-
-            Composer(mode: $mode, working: false)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.amBg.ignoresSafeArea())
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 
-private struct AgentSummaryMessage: View {
-    var body: some View {
-        (Text("All set — bottom-sheet gate is wired up, tests pass. I've pushed ")
-            + codePart(" feat/perm")
-            + Text(" to ")
-            + codePart("origin")
-            + Text(". Want me to open the PR?"))
-            .font(.amSans(Tokens.FontSize.body))
-            .foregroundStyle(Color.amInk)
-            .lineSpacing(3)
-    }
-
-    private func codePart(_ s: String) -> Text {
-        Text(s)
-            .font(.amMono(Tokens.FontSize.sm))
-            .foregroundStyle(Color.amInk)
-    }
-}
-
-private struct PRCard: View {
+struct PRCard: View {
     let pr: PRSummary
     var onOpen: () -> Void
 
@@ -233,38 +207,19 @@ private struct PRCard: View {
     }
 }
 
-#Preview("light · unopened") {
-    PRScreen().preferredColorScheme(.light)
+#Preview("light") {
+    StatePreview()
+        .preferredColorScheme(.light)
 }
 
-#Preview("dark · opened") {
-    StateFulPreview()
-        .preferredColorScheme(.dark)
-}
-
-private struct StateFulPreview: View {
-    @State private var pr = MockPR.opened
-    @State private var mode: AgentMode = .code
+private struct StatePreview: View {
+    @State private var pr = MockPR.unopened
 
     var body: some View {
-        VStack(spacing: 0) {
-            AmSubHeader(title: "Permission gate UX", subtitle: "rpi5:nic-os · feat/perm") {
-                HeaderPill { } content: { AmIcon(name: .back, size: 20) }
-            } trailing: {
-                HeaderPill { } content: { AmIcon(name: .more, size: 18) }
+        Color.amBg
+            .ignoresSafeArea()
+            .sheet(isPresented: .constant(true)) {
+                PRSheet(pr: $pr)
             }
-
-            StatusStrip(state: .ok, label: "ready to ship", mode: mode)
-
-            ScrollView {
-                VStack(spacing: 16) {
-                    PRCard(pr: pr) { }
-                }
-                .padding(20)
-            }
-
-            Composer(mode: $mode, working: false)
-        }
-        .background(Color.amBg.ignoresSafeArea())
     }
 }
