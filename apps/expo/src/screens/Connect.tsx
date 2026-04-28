@@ -1,4 +1,6 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { AmAvatar } from '../design/atoms/AmAvatar';
 import { Icon } from '../design/atoms/Icon';
@@ -6,14 +8,73 @@ import { AmPhone } from '../design/phone/AmPhone';
 import { useTheme } from '../design/theme/useTheme';
 import { fonts } from '../design/tokens/typography';
 import { radii } from '../design/tokens/radii';
+import { useAmarre } from '../lib/AmarreProvider';
+import {
+  loadSettings,
+  saveSettings,
+  settingsToUrl,
+  type Scheme,
+} from '../lib/persistence/settings';
+import { useConnection } from '../lib/store';
 
-// screens-rest.jsx:126-193 — wizard step 1 of 3.
+const DEFAULT_HOST = 'rpi5.gate-mintaka.ts.net';
+const DEFAULT_PORT = '4344';
+const DEFAULT_SCHEME: Scheme = 'wss';
+
 export function Connect() {
   const t = useTheme();
+  const { client } = useAmarre();
+  const conn = useConnection();
+  const [host, setHost] = useState(DEFAULT_HOST);
+  const [port, setPort] = useState(DEFAULT_PORT);
+  const [scheme, setScheme] = useState<Scheme>(DEFAULT_SCHEME);
+  const [submitting, setSubmitting] = useState(false);
+  const submittedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const s = await loadSettings();
+      if (cancelled || !s) return;
+      setHost(s.host);
+      setPort(s.port);
+      setScheme(s.scheme);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Once we initiate a connect, navigate when the WS opens.
+  useEffect(() => {
+    if (!submittedRef.current) return;
+    if (conn.status === 'open') {
+      submittedRef.current = false;
+      setSubmitting(false);
+      router.replace('/chat');
+    } else if (conn.status === 'closed' || conn.status === 'reconnecting') {
+      // Reconnecting after a failure → surface the error and stop spinner.
+      setSubmitting(false);
+    }
+  }, [conn.status]);
+
+  const onContinue = async () => {
+    const trimmedHost = host.trim();
+    const trimmedPort = port.trim();
+    if (!trimmedHost || !trimmedPort) return;
+    const settings = { host: trimmedHost, port: trimmedPort, scheme };
+    await saveSettings(settings);
+    submittedRef.current = true;
+    setSubmitting(true);
+    client.connect(settingsToUrl(settings));
+  };
+
+  const showError = !submitting && conn.lastError && (conn.status === 'closed' || conn.status === 'reconnecting');
+
   return (
     <AmPhone>
       <View style={styles.toolbar}>
-        <Pressable hitSlop={8}>
+        <Pressable hitSlop={8} onPress={() => router.canGoBack() && router.back()}>
           <Icon name="back" size={20} color={t.ink2} />
         </Pressable>
         <View style={{ flexDirection: 'row', gap: 6 }}>
@@ -40,53 +101,71 @@ export function Connect() {
           live?
         </Text>
         <Text style={[styles.copy, { color: t.ink2 }]}>
-          point this app at the machine running amarre. you can scan a QR or type the host directly.
+          point this app at the machine running amarre. tailnet hostname or IP, and the
+          WebSocket port your server is exposed on.
         </Text>
 
         <View style={styles.fields}>
-          <Field label="HOST" value="rpi5.tail-abcd.ts.net" mono />
-          <Field label="PORT" value="8443" mono small />
+          <Field label="HOST" value={host} onChange={setHost} autoCapitalize="none" autoCorrect={false} />
+          <Field label="PORT" value={port} onChange={setPort} keyboardType="number-pad" small />
           <View style={[styles.row, { marginTop: 4 }]}>
-            <Tab label="tailnet" active />
-            <Tab label="LAN" />
-            <Tab label="tunnel" />
+            <Tab label="wss" active={scheme === 'wss'} onPress={() => setScheme('wss')} />
+            <Tab label="ws" active={scheme === 'ws'} onPress={() => setScheme('ws')} />
           </View>
         </View>
+
+        {showError ? (
+          <Text style={[styles.error, { color: t.err }]} numberOfLines={2}>
+            {conn.lastError}
+          </Text>
+        ) : null}
       </View>
 
       <View style={styles.footer}>
         <Pressable
+          onPress={submitting ? undefined : onContinue}
           style={[
             styles.cta,
             {
-              backgroundColor: t.accent,
+              backgroundColor: submitting ? t.line : t.accent,
               borderRadius: radii.lg,
               shadowColor: '#7c5cff',
               shadowOffset: { width: 0, height: 8 },
-              shadowOpacity: 0.35,
+              shadowOpacity: submitting ? 0 : 0.35,
               shadowRadius: 22,
-              elevation: 8,
+              elevation: submitting ? 0 : 8,
             },
           ]}>
-          <Text style={{ fontFamily: fonts.sansSemiBold, color: '#fff', fontSize: 15 }}>
-            continue
-          </Text>
-        </Pressable>
-        <Pressable style={[styles.qrBtn]}>
-          <Icon name="qr" size={16} color={t.ink2} />
-          <Text style={{ fontFamily: fonts.sans, fontSize: 13, color: t.ink2 }}>
-            or scan QR from{' '}
-            <Text style={{ fontFamily: fonts.mono, fontSize: 12, color: t.ink2 }}>
-              amarre setup
+          {submitting ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={{ fontFamily: fonts.sansSemiBold, color: '#fff', fontSize: 15 }}>
+              continue
             </Text>
-          </Text>
+          )}
         </Pressable>
       </View>
     </AmPhone>
   );
 }
 
-function Field({ label, value, mono, small }: { label: string; value: string; mono?: boolean; small?: boolean }) {
+function Field({
+  label,
+  value,
+  onChange,
+  small,
+  autoCapitalize,
+  autoCorrect,
+  keyboardType,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  small?: boolean;
+  autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+  autoCorrect?: boolean;
+  keyboardType?: 'default' | 'number-pad';
+}) {
   const t = useTheme();
   return (
     <View
@@ -106,23 +185,29 @@ function Field({ label, value, mono, small }: { label: string; value: string; mo
         }}>
         {label}
       </Text>
-      <Text
+      <TextInput
+        value={value}
+        onChangeText={onChange}
+        autoCapitalize={autoCapitalize}
+        autoCorrect={autoCorrect}
+        keyboardType={keyboardType}
         style={{
-          fontFamily: mono ? fonts.mono : fonts.sansMedium,
+          fontFamily: fonts.mono,
           fontSize: small ? 16 : 17,
           color: t.ink,
           marginTop: 2,
-        }}>
-        {value}
-      </Text>
+          padding: 0,
+        }}
+      />
     </View>
   );
 }
 
-function Tab({ label, active = false }: { label: string; active?: boolean }) {
+function Tab({ label, active = false, onPress }: { label: string; active?: boolean; onPress?: () => void }) {
   const t = useTheme();
   return (
-    <View
+    <Pressable
+      onPress={onPress}
       style={{
         backgroundColor: active ? t.ink : t.bgSunk,
         paddingHorizontal: 12,
@@ -132,7 +217,7 @@ function Tab({ label, active = false }: { label: string; active?: boolean }) {
       <Text style={{ fontFamily: fonts.sansMedium, fontSize: 12, color: active ? t.bg : t.ink2 }}>
         {label}
       </Text>
-    </View>
+    </Pressable>
   );
 }
 
@@ -160,6 +245,11 @@ const styles = StyleSheet.create({
   },
   fields: { marginTop: 28, gap: 10 },
   row: { flexDirection: 'row', gap: 6 },
+  error: {
+    fontFamily: fonts.mono,
+    fontSize: 12,
+    marginTop: 16,
+  },
   footer: {
     paddingHorizontal: 16,
     paddingBottom: 16,
@@ -169,12 +259,5 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  qrBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 8,
   },
 });
