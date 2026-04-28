@@ -1,26 +1,28 @@
-// Tests the bridge against a fake pi (tests/fixtures/fake-pi.sh) so we don't
-// need a real pi binary or network access during `bun test` / `nix flake check`.
+// Integration tests for the generic WS proxy. Uses the test-only
+// `echo` adapter (tests/fixtures/echo-adapter.ts + echo-agent.sh) so we
+// don't depend on real `pi` for these.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolve as pathResolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createConnection } from "node:net";
+import { createServer } from "node:net";
 import { WebSocket } from "ws";
 
 const PROJECT_ROOT = pathResolve(import.meta.dir, "..");
-const BRIDGE_TS = pathResolve(PROJECT_ROOT, "bridge/bridge.ts");
-const FAKE_PI = pathResolve(PROJECT_ROOT, "tests/fixtures/fake-pi.sh");
+const SERVER_TS = pathResolve(PROJECT_ROOT, "server/server.ts");
+const ECHO_ADAPTER = pathResolve(PROJECT_ROOT, "tests/fixtures/echo-adapter.ts");
 
-type StartedBridge = {
+type StartedServer = {
   proc: ChildProcess;
   port: number;
   url: string;
 };
 
-async function findFreePort(): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    const srv = require("node:net").createServer();
+function findFreePort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const srv = createServer();
     srv.once("error", reject);
     srv.listen(0, "127.0.0.1", () => {
       const port = (srv.address() as { port: number }).port;
@@ -45,41 +47,35 @@ async function waitForPort(port: number, timeoutMs = 5000): Promise<void> {
   throw new Error(`port ${port} did not open within ${timeoutMs}ms`);
 }
 
-async function startBridge(extraEnv: Record<string, string> = {}): Promise<StartedBridge> {
+async function startServer(): Promise<StartedServer> {
   const port = await findFreePort();
-  const proc = spawn(process.execPath, ["run", BRIDGE_TS], {
+  const proc = spawn(process.execPath, ["run", SERVER_TS], {
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
-      PI_BIN: FAKE_PI,
-      PI_MOBILE_PORT: String(port),
-      PI_MOBILE_HOST: "127.0.0.1",
-      // Don't load a permission gate in bridge-only tests.
-      PI_MOBILE_GATE: "",
-      ...extraEnv,
+      AMARRE_AGENT_PATH: ECHO_ADAPTER,
+      AMARRE_PORT: String(port),
+      AMARRE_HOST: "127.0.0.1",
     },
   });
-  proc.stdout?.on("data", (d) => process.stderr.write(`[bridge.stdout] ${d}`));
-  proc.stderr?.on("data", (d) => process.stderr.write(`[bridge.stderr] ${d}`));
+  proc.stdout?.on("data", (d) => process.stderr.write(`[server.stdout] ${d}`));
+  proc.stderr?.on("data", (d) => process.stderr.write(`[server.stderr] ${d}`));
   await waitForPort(port);
   return { proc, port, url: `ws://127.0.0.1:${port}/` };
 }
 
-async function stopBridge(b: StartedBridge): Promise<number | null> {
-  if (b.proc.exitCode !== null) return b.proc.exitCode;
+async function stopServer(s: StartedServer): Promise<number | null> {
+  if (s.proc.exitCode !== null) return s.proc.exitCode;
   return await new Promise<number | null>((resolve) => {
-    b.proc.once("exit", (code) => resolve(code));
-    b.proc.kill("SIGTERM");
+    s.proc.once("exit", (code) => resolve(code));
+    s.proc.kill("SIGTERM");
     setTimeout(() => {
-      if (b.proc.exitCode === null) b.proc.kill("SIGKILL");
+      if (s.proc.exitCode === null) s.proc.kill("SIGKILL");
     }, 2000).unref();
   });
 }
 
-type Reader = {
-  ws: WebSocket;
-  next(timeoutMs?: number): Promise<string>;
-};
+type Reader = { ws: WebSocket; next(timeoutMs?: number): Promise<string> };
 
 async function openWs(url: string): Promise<Reader> {
   const ws = await new Promise<WebSocket>((resolve, reject) => {
@@ -87,7 +83,6 @@ async function openWs(url: string): Promise<Reader> {
     w.once("open", () => resolve(w));
     w.once("error", reject);
   });
-
   const queue: string[] = [];
   const waiters: Array<(value: string) => void> = [];
   ws.on("message", (data) => {
@@ -96,7 +91,6 @@ async function openWs(url: string): Promise<Reader> {
     if (w) w(text);
     else queue.push(text);
   });
-
   return {
     ws,
     next(timeoutMs = 2000) {
@@ -120,17 +114,17 @@ async function openWs(url: string): Promise<Reader> {
   };
 }
 
-describe("bridge", () => {
-  let bridge: StartedBridge | null = null;
+describe("server", () => {
+  let s: StartedServer | null = null;
 
   afterEach(async () => {
-    if (bridge) await stopBridge(bridge);
-    bridge = null;
+    if (s) await stopServer(s);
+    s = null;
   });
 
   test("round-trips a single command", async () => {
-    bridge = await startBridge();
-    const r = await openWs(bridge.url);
+    s = await startServer();
+    const r = await openWs(s.url);
     r.ws.send(`{"id":"1","type":"prompt","message":"hi"}`);
     const parsed = JSON.parse(await r.next());
     expect(parsed.type).toBe("response");
@@ -141,9 +135,9 @@ describe("bridge", () => {
   });
 
   test("fans out events to multiple clients", async () => {
-    bridge = await startBridge();
-    const a = await openWs(bridge.url);
-    const b = await openWs(bridge.url);
+    s = await startServer();
+    const a = await openWs(s.url);
+    const b = await openWs(s.url);
     a.ws.send(`{"_emit":"chunk"}`);
     const [ra1, ra2, rb1, rb2] = await Promise.all([a.next(), a.next(), b.next(), b.next()]);
     expect(JSON.parse(ra1).n).toBe(1);
@@ -155,8 +149,8 @@ describe("bridge", () => {
   });
 
   test("splits multi-line stdout chunks into separate ws messages", async () => {
-    bridge = await startBridge();
-    const r = await openWs(bridge.url);
+    s = await startServer();
+    const r = await openWs(s.url);
     r.ws.send(`{"_emit":"chunk"}`);
     const m1 = JSON.parse(await r.next());
     const m2 = JSON.parse(await r.next());
@@ -166,8 +160,8 @@ describe("bridge", () => {
   });
 
   test("buffers a partial stdout line until the newline arrives", async () => {
-    bridge = await startBridge();
-    const r = await openWs(bridge.url);
+    s = await startServer();
+    const r = await openWs(s.url);
     r.ws.send(`{"_emit":"split"}`);
     const parsed = JSON.parse(await r.next(3000));
     expect(parsed.type).toBe("split");
@@ -175,15 +169,15 @@ describe("bridge", () => {
     r.ws.close();
   });
 
-  test("exits non-zero when pi dies (so systemd restarts the unit)", async () => {
-    bridge = await startBridge();
-    const r = await openWs(bridge.url);
+  test("exits non-zero when the agent dies (so systemd restarts the unit)", async () => {
+    s = await startServer();
+    const r = await openWs(s.url);
     r.ws.send(`{"_emit":"die"}`);
     const code = await new Promise<number | null>((resolve) => {
-      bridge!.proc.once("exit", (c) => resolve(c));
+      s!.proc.once("exit", (c) => resolve(c));
       setTimeout(() => resolve(null), 5000).unref();
     });
     expect(code).toBe(1);
-    bridge = null; // already exited
+    s = null;
   });
 });
