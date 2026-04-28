@@ -14,14 +14,22 @@
     in {
       packages = forAllSystems (system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          # Narrow allowUnfree to claude-code only — needed for the
+          # claude-code adapter; doesn't widen the rest of the closure.
+          pkgs = import nixpkgs {
+            inherit system;
+            config.allowUnfreePredicate = pkg:
+              builtins.elem (nixpkgs.lib.getName pkg) [ "claude-code" ];
+          };
           pi = llm-agents.packages.${system}.pi;
+          claudeCode = pkgs.claude-code;
           src = ./.;
           server = pkgs.writeShellApplication {
             name = "amarre-server";
-            runtimeInputs = [ pkgs.bun pi ];
+            runtimeInputs = [ pkgs.bun pi claudeCode ];
             text = ''
               export PI_BIN="''${PI_BIN:-${pi}/bin/pi}"
+              export CLAUDE_BIN="''${CLAUDE_BIN:-${claudeCode}/bin/claude}"
               export AMARRE_AGENT="''${AMARRE_AGENT:-pi}"
               exec bun run ${src}/server/server.ts "$@"
             '';
