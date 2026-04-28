@@ -9,6 +9,7 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+import { AmarreProvider } from '../src/lib/AmarreProvider';
 import { ThemeProvider } from '../src/design/theme/ThemeProvider';
 
 export default function RootLayout() {
@@ -28,7 +29,9 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider override="auto">
-        <Stack screenOptions={{ headerShown: false }} />
+        <AmarreProvider>
+          <Stack screenOptions={{ headerShown: false }} />
+        </AmarreProvider>
       </ThemeProvider>
     </GestureHandlerRootView>
   );
