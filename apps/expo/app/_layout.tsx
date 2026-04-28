@@ -10,6 +10,7 @@ import { Stack } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AmarreProvider } from '../src/lib/AmarreProvider';
+import { PermissionSheet } from '../src/screens/_parts/PermissionSheet';
 import { ThemeProvider } from '../src/design/theme/ThemeProvider';
 
 export default function RootLayout() {
@@ -31,6 +32,7 @@ export default function RootLayout() {
       <ThemeProvider override="auto">
         <AmarreProvider>
           <Stack screenOptions={{ headerShown: false }} />
+          <PermissionSheet />
         </AmarreProvider>
       </ThemeProvider>
     </GestureHandlerRootView>
