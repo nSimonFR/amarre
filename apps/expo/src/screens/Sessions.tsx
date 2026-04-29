@@ -1,10 +1,9 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { AmAvatar } from '../design/atoms/AmAvatar';
 import { AmWordmark } from '../design/atoms/AmWordmark';
-import { HeaderPill } from '../design/atoms/HeaderPill';
 import { Icon } from '../design/atoms/Icon';
 import { StatusOrb, type OrbState } from '../design/atoms/StatusOrb';
 import { AmHeader } from '../design/phone/AmHeader';
@@ -14,6 +13,7 @@ import { useTheme } from '../design/theme/useTheme';
 import { fonts } from '../design/tokens/typography';
 import { radii } from '../design/tokens/radii';
 import { useAmarre } from '../lib/AmarreProvider';
+import { store } from '../lib/store';
 import { httpBaseUrl, loadSettings, type Settings } from '../lib/persistence/settings';
 import {
   createSession,
@@ -31,6 +31,9 @@ export function Sessions() {
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<TextInput>(null);
 
   const refresh = useCallback(async (s: Settings | null) => {
     if (!s) return;
@@ -71,7 +74,7 @@ export function Sessions() {
     try {
       const info = await createSession(httpBaseUrl(settings));
       await connectToSession(info.id);
-      router.replace('/chat');
+      router.push('/chat');
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -95,7 +98,7 @@ export function Sessions() {
     }
     try {
       await connectToSession(info.id);
-      router.replace('/chat');
+      router.push('/chat');
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -108,6 +111,7 @@ export function Sessions() {
     const run = async () => {
       try {
         await deleteSession(httpBaseUrl(settings), info.id);
+        store.removeSession(info.id);
         await refresh(settings);
       } catch (e) {
         setError(formatError(e));
@@ -129,34 +133,86 @@ export function Sessions() {
     ? 'loading…'
     : `${live} live${crashed ? ` · ${crashed} crashed` : ''}`;
 
+  const visible = sessions
+    ? query.trim()
+      ? sessions.filter((s) => {
+          const q = query.trim().toLowerCase();
+          return (s.name ?? '').toLowerCase().includes(q) || s.id.toLowerCase().includes(q);
+        })
+      : sessions
+    : null;
+
   return (
     <AmPhone>
       <AmHeader
         title="Sessions"
         subtitle={subtitle}
         leading={
-          <View style={styles.brand}>
-            <AmAvatar size={32} />
-            <AmWordmark size={22} />
-          </View>
+          searchOpen ? null : (
+            <View style={styles.brand}>
+              <AmAvatar size={32} />
+              <AmWordmark size={22} />
+            </View>
+          )
         }
         trailing={
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <Pressable hitSlop={8} onPress={() => refresh(settings)}>
-              <HeaderPill>
+          searchOpen ? (
+            <View
+              style={[
+                styles.searchPill,
+                { backgroundColor: t.bgElev, borderColor: t.line, flex: 1, marginRight: 4 },
+              ]}>
+              <Icon name="search" size={16} color={t.ink3} />
+              <TextInput
+                ref={searchInputRef}
+                value={query}
+                onChangeText={setQuery}
+                placeholder="search"
+                placeholderTextColor={t.ink3}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoFocus
+                returnKeyType="search"
+                onBlur={() => {
+                  if (!query.trim()) setSearchOpen(false);
+                }}
+                style={{
+                  flex: 1,
+                  fontFamily: fonts.sans,
+                  fontSize: 13,
+                  color: t.ink,
+                  padding: 0,
+                  marginLeft: 6,
+                }}
+              />
+              <Pressable
+                hitSlop={8}
+                onPress={() => {
+                  setQuery('');
+                  setSearchOpen(false);
+                }}>
+                <Icon name="x" size={14} color={t.ink3} />
+              </Pressable>
+            </View>
+          ) : (
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <Pressable
+                hitSlop={8}
+                onPress={() => setSearchOpen(true)}
+                style={[styles.searchBtn, { backgroundColor: t.bgElev, borderColor: t.line }]}>
                 <Icon name="search" size={18} color={t.ink2} />
-              </HeaderPill>
-            </Pressable>
-            <Pressable
-              onPress={busy === 'spawn' ? undefined : onSpawn}
-              style={[styles.add, { backgroundColor: busy === 'spawn' ? t.line : t.accent }]}>
-              {busy === 'spawn' ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Icon name="plus" size={18} color="#fff" />
-              )}
-            </Pressable>
-          </View>
+              </Pressable>
+              <Pressable
+                onPress={busy === 'spawn' ? undefined : onSpawn}
+                style={[styles.add, { backgroundColor: busy === 'spawn' ? t.line : t.accent }]}>
+                {busy === 'spawn' ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Icon name="plus" size={18} color="#fff" />
+                )}
+              </Pressable>
+            </View>
+          )
         }
       />
 
@@ -175,9 +231,11 @@ export function Sessions() {
           </View>
         ) : sessions.length === 0 ? (
           <EmptyHint t={t} />
+        ) : visible && visible.length === 0 ? (
+          <NoMatchesHint t={t} query={query} />
         ) : (
           <View style={styles.cards}>
-            {sessions.map((s) => (
+            {(visible ?? sessions).map((s) => (
               <SessionCard
                 key={s.id}
                 info={s}
@@ -202,6 +260,16 @@ function EmptyHint({ t }: { t: ReturnType<typeof useTheme> }) {
       </Text>
       <Text style={{ fontFamily: fonts.sans, fontSize: 13, color: t.ink3, marginTop: 8, textAlign: 'center' }}>
         tap + to spawn one
+      </Text>
+    </View>
+  );
+}
+
+function NoMatchesHint({ t, query }: { t: ReturnType<typeof useTheme>; query: string }) {
+  return (
+    <View style={styles.empty}>
+      <Text style={{ fontFamily: fonts.sans, fontSize: 13, color: t.ink3, textAlign: 'center' }}>
+        no sessions match “{query.trim()}”
       </Text>
     </View>
   );
@@ -319,4 +387,20 @@ const styles = StyleSheet.create({
   },
   loading: { paddingVertical: 64, alignItems: 'center' },
   empty: { paddingHorizontal: 24, paddingVertical: 64 },
+  searchPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  searchBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
 });
