@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Icon, type IconName } from '../design/atoms/Icon';
 import { StatusDot, type DotState } from '../design/atoms/StatusDot';
@@ -102,6 +102,11 @@ export function Chat() {
 
   return (
     <AmPhone>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
       <SubHeaderBack
         title={agent.sessionName ?? (sessionId ? sessionId.slice(0, 8) : 'amarre')}
         subtitle={subtitle ?? ''}
@@ -161,6 +166,7 @@ export function Chat() {
       )}
 
       <Composer mode="code" working={isStreaming} onSend={onSend} onStop={onStop} />
+      </KeyboardAvoidingView>
     </AmPhone>
   );
 }

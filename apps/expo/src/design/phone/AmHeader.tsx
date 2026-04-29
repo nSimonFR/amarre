@@ -23,7 +23,7 @@ export function AmHeader({
     <View style={[styles.root, { backgroundColor: t.bg }]}>
       <View style={styles.toolbar}>
         <View style={styles.slot}>{leading}</View>
-        <View style={styles.slot}>{trailing}</View>
+        <View style={[styles.slot, styles.slotTrailing]}>{trailing}</View>
       </View>
       {title ? (
         <Text
@@ -60,4 +60,5 @@ const styles = StyleSheet.create({
     minHeight: 36,
   },
   slot: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  slotTrailing: { flex: 1, justifyContent: 'flex-end', marginLeft: 8 },
 });

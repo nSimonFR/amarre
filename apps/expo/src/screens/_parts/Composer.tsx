@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { GlassPill } from '../../design/atoms/GlassPill';
 import { Icon } from '../../design/atoms/Icon';
@@ -31,7 +31,7 @@ export function Composer({
   };
 
   return (
-    <View style={[styles.root, { backgroundColor: t.bg }]}>
+    <View style={[styles.root, { backgroundColor: t.bg, paddingBottom: Platform.OS === 'ios' ? 28 : 16 }]}>
       <GlassPill
         radius={radii.lg}
         style={[
