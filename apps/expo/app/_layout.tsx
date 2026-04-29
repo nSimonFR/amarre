@@ -7,11 +7,35 @@ import {
 } from '@expo-google-fonts/jetbrains-mono';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
+import * as SystemUI from 'expo-system-ui';
+import { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AmarreProvider } from '../src/lib/AmarreProvider';
 import { PermissionSheet } from '../src/screens/_parts/PermissionSheet';
 import { ThemeProvider } from '../src/design/theme/ThemeProvider';
+import { useTheme } from '../src/design/theme/useTheme';
+
+function Root() {
+  const t = useTheme();
+  useEffect(() => {
+    SystemUI.setBackgroundColorAsync(t.bg).catch(() => {});
+  }, [t.bg]);
+  return (
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: t.bg }}>
+      <AmarreProvider>
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: t.bg },
+            animation: 'fade',
+          }}
+        />
+        <PermissionSheet />
+      </AmarreProvider>
+    </GestureHandlerRootView>
+  );
+}
 
 export default function RootLayout() {
   const [loaded] = useFonts({
@@ -28,13 +52,8 @@ export default function RootLayout() {
   if (!loaded) return null;
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider override="auto">
-        <AmarreProvider>
-          <Stack screenOptions={{ headerShown: false }} />
-          <PermissionSheet />
-        </AmarreProvider>
-      </ThemeProvider>
-    </GestureHandlerRootView>
+    <ThemeProvider override="auto">
+      <Root />
+    </ThemeProvider>
   );
 }

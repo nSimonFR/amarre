@@ -1,9 +1,17 @@
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Keyboard,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableWithoutFeedback,
+  View,
+} from 'react-native';
 
 import { AmAvatar } from '../design/atoms/AmAvatar';
-import { Icon } from '../design/atoms/Icon';
 import { AmPhone } from '../design/phone/AmPhone';
 import { useTheme } from '../design/theme/useTheme';
 import { fonts } from '../design/tokens/typography';
@@ -64,78 +72,62 @@ export function Connect() {
 
   return (
     <AmPhone>
-      <View style={styles.toolbar}>
-        <Pressable hitSlop={8} onPress={() => router.canGoBack() && router.back()}>
-          <Icon name="back" size={20} color={t.ink2} />
-        </Pressable>
-        <View style={{ flexDirection: 'row', gap: 6 }}>
-          {[0, 1, 2].map((i) => (
-            <View
-              key={i}
-              style={{
-                width: i === 0 ? 22 : 6,
-                height: 6,
-                borderRadius: 3,
-                backgroundColor: i === 0 ? t.accent : t.lineStrong,
-              }}
-            />
-          ))}
-        </View>
-        <View style={{ width: 36 }} />
-      </View>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <View style={{ flex: 1 }}>
+          <View style={styles.body}>
+            <AmAvatar size={56} halo />
+            <Text style={[styles.headline, { color: t.ink }]}>
+              where does{' '}
+              <Text style={{ fontFamily: fonts.serifItalic, color: t.accent }}>amarre</Text>{' '}
+              live?
+            </Text>
+            <Text style={[styles.copy, { color: t.ink2 }]}>
+              point this app at the machine running amarre. tailnet hostname or IP, and the
+              WebSocket port your server is exposed on.
+            </Text>
 
-      <View style={styles.body}>
-        <AmAvatar size={56} halo />
-        <Text style={[styles.headline, { color: t.ink }]}>
-          where does{' '}
-          <Text style={{ fontFamily: fonts.serifItalic, color: t.accent }}>amarre</Text>{' '}
-          live?
-        </Text>
-        <Text style={[styles.copy, { color: t.ink2 }]}>
-          point this app at the machine running amarre. tailnet hostname or IP, and the
-          WebSocket port your server is exposed on.
-        </Text>
+            <View style={styles.fields}>
+              <Field label="HOST" value={host} onChange={setHost} autoCapitalize="none" autoCorrect={false} />
+              <Field label="PORT" value={port} onChange={setPort} keyboardType="number-pad" small />
+              <View style={[styles.row, { marginTop: 4 }]}>
+                <Tab label="wss" active={scheme === 'wss'} onPress={() => setScheme('wss')} />
+                <Tab label="ws" active={scheme === 'ws'} onPress={() => setScheme('ws')} />
+              </View>
+            </View>
 
-        <View style={styles.fields}>
-          <Field label="HOST" value={host} onChange={setHost} autoCapitalize="none" autoCorrect={false} />
-          <Field label="PORT" value={port} onChange={setPort} keyboardType="number-pad" small />
-          <View style={[styles.row, { marginTop: 4 }]}>
-            <Tab label="wss" active={scheme === 'wss'} onPress={() => setScheme('wss')} />
-            <Tab label="ws" active={scheme === 'ws'} onPress={() => setScheme('ws')} />
+            {showError ? (
+              <Text style={[styles.error, { color: t.err }]} numberOfLines={2}>
+                {error}
+              </Text>
+            ) : null}
+          </View>
+
+          <View style={styles.footer}>
+            <Pressable
+              onPress={submitting ? undefined : onContinue}
+              style={[
+                styles.cta,
+                {
+                  backgroundColor: submitting ? t.line : t.accent,
+                  borderRadius: radii.lg,
+                  shadowColor: '#7c5cff',
+                  shadowOffset: { width: 0, height: 8 },
+                  shadowOpacity: submitting ? 0 : 0.35,
+                  shadowRadius: 22,
+                  elevation: submitting ? 0 : 8,
+                },
+              ]}>
+              {submitting ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={{ fontFamily: fonts.sansSemiBold, color: '#fff', fontSize: 15 }}>
+                  continue
+                </Text>
+              )}
+            </Pressable>
           </View>
         </View>
-
-        {showError ? (
-          <Text style={[styles.error, { color: t.err }]} numberOfLines={2}>
-            {error}
-          </Text>
-        ) : null}
-      </View>
-
-      <View style={styles.footer}>
-        <Pressable
-          onPress={submitting ? undefined : onContinue}
-          style={[
-            styles.cta,
-            {
-              backgroundColor: submitting ? t.line : t.accent,
-              borderRadius: radii.lg,
-              shadowColor: '#7c5cff',
-              shadowOffset: { width: 0, height: 8 },
-              shadowOpacity: submitting ? 0 : 0.35,
-              shadowRadius: 22,
-              elevation: submitting ? 0 : 8,
-            },
-          ]}>
-          {submitting ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={{ fontFamily: fonts.sansSemiBold, color: '#fff', fontSize: 15 }}>
-              continue
-            </Text>
-          )}
-        </Pressable>
-      </View>
+      </TouchableWithoutFeedback>
     </AmPhone>
   );
 }
@@ -213,15 +205,7 @@ function Tab({ label, active = false, onPress }: { label: string; active?: boole
 }
 
 const styles = StyleSheet.create({
-  toolbar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 12,
-  },
-  body: { paddingHorizontal: 24, paddingTop: 20 },
+  body: { flex: 1, paddingHorizontal: 24, paddingTop: 20 },
   headline: {
     fontFamily: fonts.sansBold,
     fontSize: 32,
@@ -243,7 +227,7 @@ const styles = StyleSheet.create({
   },
   footer: {
     paddingHorizontal: 16,
-    paddingBottom: 16,
+    paddingBottom: 24,
     gap: 10,
   },
   cta: {
