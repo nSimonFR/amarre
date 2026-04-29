@@ -19,7 +19,7 @@ type Route = {
 const ROUTES: Route[] = [
   { href: '/connect', label: 'Connect', hint: 'enter amarre URL', icon: 'cloud', live: true },
   { href: '/chat', label: 'Chat', hint: 'live session', icon: 'edit', live: true },
-  { href: '/sessions', label: 'Sessions', hint: 'list of active and recent sessions', icon: 'menu' },
+  { href: '/sessions', label: 'Sessions', hint: 'list / spawn / pick session', icon: 'menu', live: true },
   { href: '/permission', label: 'Permission', hint: 'inline gate card', icon: 'shield' },
   { href: '/pr', label: 'PR / Result', hint: 'completion summary', icon: 'git' },
   { href: '/streaming', label: 'Streaming', hint: '14s hi-fi animation loop', icon: 'sparkle' },

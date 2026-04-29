@@ -10,8 +10,13 @@ export type Settings = {
   scheme: Scheme;
 };
 
-export function settingsToUrl(s: Settings): string {
-  return `${s.scheme}://${s.host}:${s.port}/`;
+export function httpBaseUrl(s: Settings): string {
+  const httpScheme = s.scheme === 'wss' ? 'https' : 'http';
+  return `${httpScheme}://${s.host}:${s.port}`;
+}
+
+export function wsUrl(s: Settings, sessionId: string): string {
+  return `${s.scheme}://${s.host}:${s.port}/sessions/${encodeURIComponent(sessionId)}`;
 }
 
 export async function loadSettings(): Promise<Settings | null> {

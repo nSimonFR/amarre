@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 import { store, type State } from './store';
-import type { AgentSnapshot, StreamingState, ToolExecState } from './types';
+import type { AgentSnapshot, SessionCrash, StreamingState, ToolExecState } from './types';
 import type { AgentMessage, ExtensionUiRequestEvent } from '../protocol';
 import type { ConnectionState } from '../ws/client';
 
@@ -35,4 +35,12 @@ export function useToolExecs(): Map<string, ToolExecState> {
 
 export function usePermissionRequests(): ExtensionUiRequestEvent[] {
   return useSlice((s) => s.permissionRequests);
+}
+
+export function useCurrentSessionId(): string | null {
+  return useSlice((s) => s.currentSessionId);
+}
+
+export function useSessionCrashed(): SessionCrash | null {
+  return useSlice((s) => s.sessionCrashed);
 }

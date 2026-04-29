@@ -1,7 +1,15 @@
 // Singleton observable store. Subscribe + getSnapshot are the React-18 API
 // expected by useSyncExternalStore.
 
-import { dismissPermission, initialState, pushUserMessage, reduce, setConn } from './reducer';
+import {
+  clearSessionCrashed,
+  dismissPermission,
+  initialState,
+  pushUserMessage,
+  reduce,
+  setConn,
+  setCurrentSession,
+} from './reducer';
 import type { State } from './types';
 import type { PiEvent, UnknownEvent } from '../protocol';
 import type { ConnectionState } from '../ws/client';
@@ -35,6 +43,14 @@ class Store {
 
   dismissPermission(id: string): void {
     this.set(dismissPermission(this.state, id));
+  }
+
+  setCurrentSession(sessionId: string | null): void {
+    this.set(setCurrentSession(this.state, sessionId));
+  }
+
+  clearSessionCrashed(): void {
+    this.set(clearSessionCrashed(this.state));
   }
 
   reset(): void {

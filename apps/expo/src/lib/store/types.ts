@@ -38,6 +38,12 @@ export type RetryBanner = {
   errorMessage?: string;
 };
 
+export type SessionCrash = {
+  sessionId: string;
+  exitCode: number | null;
+  signal: string | null;
+};
+
 export type State = {
   conn: ConnectionState;
   agent: AgentSnapshot;
@@ -46,6 +52,8 @@ export type State = {
   toolExecs: Map<string, ToolExecState>;
   permissionRequests: ExtensionUiRequestEvent[];
   retry: RetryBanner | null;
+  currentSessionId: string | null;
+  sessionCrashed: SessionCrash | null;
 };
 
 export type StreamingFinalAssistant = AssistantMessage;

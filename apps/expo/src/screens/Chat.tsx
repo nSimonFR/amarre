@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
-import { useEffect, useRef } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Icon, type IconName } from '../design/atoms/Icon';
 import { StatusDot, type DotState } from '../design/atoms/StatusDot';
@@ -9,12 +9,16 @@ import { useTheme } from '../design/theme/useTheme';
 import { fonts } from '../design/tokens/typography';
 import { radii } from '../design/tokens/radii';
 import { useAmarre } from '../lib/AmarreProvider';
+import { httpBaseUrl, loadSettings } from '../lib/persistence/settings';
+import { restartSession } from '../lib/rest/sessions';
 import {
   store,
   useAgent,
   useConnection,
+  useCurrentSessionId,
   useIsStreaming,
   useMessages,
+  useSessionCrashed,
   useStreamingAssistant,
   useToolExecs,
   type ToolExecState,
@@ -32,21 +36,41 @@ import { SubHeaderBack } from './_parts/SubHeaderBack';
 
 export function Chat() {
   const t = useTheme();
-  const { client } = useAmarre();
+  const { client, connectToSession } = useAmarre();
   const conn = useConnection();
   const agent = useAgent();
   const messages = useMessages();
   const streaming = useStreamingAssistant();
   const toolExecs = useToolExecs();
   const isStreaming = useIsStreaming();
+  const sessionId = useCurrentSessionId();
+  const crashed = useSessionCrashed();
+  const [restarting, setRestarting] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
-  // Redirect to /connect if no live socket.
+  // No selected session → bounce to the picker.
   useEffect(() => {
-    if (conn.status === 'idle' || conn.status === 'closed') {
-      router.replace('/connect');
+    if (!sessionId) router.replace('/sessions');
+  }, [sessionId]);
+
+  const onRestart = async () => {
+    if (!sessionId || restarting) return;
+    setRestarting(true);
+    try {
+      const settings = await loadSettings();
+      if (!settings) {
+        router.replace('/connect');
+        return;
+      }
+      await restartSession(httpBaseUrl(settings), sessionId);
+      store.clearSessionCrashed();
+      await connectToSession(sessionId);
+    } catch {
+      // Leave the banner up so the user can retry.
+    } finally {
+      setRestarting(false);
     }
-  }, [conn.status]);
+  };
 
   // Auto-scroll on new messages or streaming deltas.
   useEffect(() => {
@@ -68,25 +92,49 @@ export function Chat() {
   };
 
   const subtitle =
-    conn.status === 'open'
-      ? conn.url
+    crashed
+      ? 'session crashed'
+      : conn.status === 'open'
+      ? compactWsUrl(conn.url)
       : conn.status === 'reconnecting'
       ? 'reconnecting…'
       : conn.status;
 
   return (
     <AmPhone>
-      <SubHeaderBack title={agent.sessionName ?? 'amarre'} subtitle={subtitle ?? ''} />
+      <SubHeaderBack
+        title={agent.sessionName ?? (sessionId ? sessionId.slice(0, 8) : 'amarre')}
+        subtitle={subtitle ?? ''}
+      />
       <StatusStrip
-        state={isStreaming ? 'run' : conn.status === 'open' ? 'ok' : 'warn'}
+        state={crashed ? 'err' : isStreaming ? 'run' : conn.status === 'open' ? 'ok' : 'warn'}
         text={
-          isStreaming
+          crashed
+            ? `crashed (exit ${crashed.exitCode ?? crashed.signal ?? '?'})`
+            : isStreaming
             ? 'amarre is working…'
             : conn.status === 'reconnecting'
             ? 'reconnecting…'
             : 'idle'
         }
       />
+
+      {crashed ? (
+        <View style={[styles.crashBar, { backgroundColor: t.bgSunk, borderColor: t.line }]}>
+          <Text style={{ flex: 1, fontFamily: fonts.mono, fontSize: 11, color: t.err }}>
+            session crashed (exit {crashed.exitCode ?? crashed.signal ?? '?'})
+          </Text>
+          <Pressable
+            onPress={restarting ? undefined : onRestart}
+            style={[styles.restartBtn, { backgroundColor: restarting ? t.line : t.accent, borderRadius: radii.sm }]}>
+            {restarting ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={{ fontFamily: fonts.sansSemiBold, fontSize: 12, color: '#fff' }}>restart</Text>
+            )}
+          </Pressable>
+        </View>
+      ) : null}
 
       {conn.status === 'connecting' && messages.length === 0 ? (
         <View style={styles.center}>
@@ -281,6 +329,18 @@ function truncate(s: string, n: number): string {
   return s.slice(0, n - 1) + '…';
 }
 
+function compactWsUrl(url: string | undefined): string {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/^\/sessions\//, '/');
+    const head = path.length > 9 ? `${path.slice(0, 9)}…` : path;
+    return `${u.host}${head}`;
+  } catch {
+    return url;
+  }
+}
+
 const styles = StyleSheet.create({
   scroll: {
     paddingHorizontal: 20,
@@ -309,6 +369,24 @@ const styles = StyleSheet.create({
   },
   center: {
     flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  crashBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 16,
+    marginTop: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radii.sm,
+  },
+  restartBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    minWidth: 70,
     alignItems: 'center',
     justifyContent: 'center',
   },
