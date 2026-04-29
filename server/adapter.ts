@@ -9,10 +9,19 @@ import type { Readable, Writable } from "node:stream";
 
 export type AgentChild = ChildProcessByStdio<Writable, Readable, null>;
 
+export interface SpawnOpts {
+  /** Working directory for the spawned child. Caller's responsibility (e.g.
+   *  the iOS app) to make sure the path exists; amarre does not create it. */
+  cwd?: string;
+  /** Per-session env overrides, merged over `process.env`. */
+  env?: Record<string, string>;
+}
+
 export interface AgentAdapter {
   /** Display name; surfaced in logs and (eventually) the hello message. */
   name: string;
   /** Spawn the underlying agent. stdin pipe + stdout pipe required; stderr
-   *  inherits or pipes — server doesn't care. */
-  spawn(): AgentChild;
+   *  inherits or pipes — server doesn't care. `opts` is per-session and
+   *  optional; adapters that ignore it still work. */
+  spawn(opts?: SpawnOpts): AgentChild;
 }

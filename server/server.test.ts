@@ -1,6 +1,7 @@
-// Integration tests for the generic WS proxy. Uses the test-only
-// `echo` adapter (tests/fixtures/echo-adapter.ts + echo-agent.sh) so we
-// don't depend on real `pi` for these.
+// Integration tests for the per-session WS proxy. Uses the test-only echo
+// adapter (tests/fixtures/echo-adapter.ts + echo-agent.sh) so we don't depend
+// on real `pi`. Crash-isolation, list, delete, restart and per-session
+// permission-flow tests live in server/multi.test.ts.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -17,7 +18,8 @@ const ECHO_ADAPTER = pathResolve(PROJECT_ROOT, "tests/fixtures/echo-adapter.ts")
 type StartedServer = {
   proc: ChildProcess;
   port: number;
-  url: string;
+  baseUrl: string; // http://127.0.0.1:<port>
+  wsHost: string; // ws://127.0.0.1:<port>
 };
 
 function findFreePort(): Promise<number> {
@@ -47,7 +49,7 @@ async function waitForPort(port: number, timeoutMs = 5000): Promise<void> {
   throw new Error(`port ${port} did not open within ${timeoutMs}ms`);
 }
 
-async function startServer(): Promise<StartedServer> {
+export async function startServer(extraEnv: Record<string, string> = {}): Promise<StartedServer> {
   const port = await findFreePort();
   const proc = spawn(process.execPath, ["run", SERVER_TS], {
     stdio: ["ignore", "pipe", "pipe"],
@@ -56,15 +58,21 @@ async function startServer(): Promise<StartedServer> {
       AMARRE_AGENT_PATH: ECHO_ADAPTER,
       AMARRE_PORT: String(port),
       AMARRE_HOST: "127.0.0.1",
+      ...extraEnv,
     },
   });
   proc.stdout?.on("data", (d) => process.stderr.write(`[server.stdout] ${d}`));
   proc.stderr?.on("data", (d) => process.stderr.write(`[server.stderr] ${d}`));
   await waitForPort(port);
-  return { proc, port, url: `ws://127.0.0.1:${port}/` };
+  return {
+    proc,
+    port,
+    baseUrl: `http://127.0.0.1:${port}`,
+    wsHost: `ws://127.0.0.1:${port}`,
+  };
 }
 
-async function stopServer(s: StartedServer): Promise<number | null> {
+export async function stopServer(s: StartedServer): Promise<number | null> {
   if (s.proc.exitCode !== null) return s.proc.exitCode;
   return await new Promise<number | null>((resolve) => {
     s.proc.once("exit", (code) => resolve(code));
@@ -75,9 +83,13 @@ async function stopServer(s: StartedServer): Promise<number | null> {
   });
 }
 
-type Reader = { ws: WebSocket; next(timeoutMs?: number): Promise<string> };
+export type Reader = {
+  ws: WebSocket;
+  next(timeoutMs?: number): Promise<string>;
+  closed: Promise<{ code: number; reason: string }>;
+};
 
-async function openWs(url: string): Promise<Reader> {
+export async function openWs(url: string): Promise<Reader> {
   const ws = await new Promise<WebSocket>((resolve, reject) => {
     const w = new WebSocket(url);
     w.once("open", () => resolve(w));
@@ -91,8 +103,12 @@ async function openWs(url: string): Promise<Reader> {
     if (w) w(text);
     else queue.push(text);
   });
+  const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+    ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+  });
   return {
     ws,
+    closed,
     next(timeoutMs = 2000) {
       return new Promise<string>((resolve, reject) => {
         const queued = queue.shift();
@@ -114,7 +130,20 @@ async function openWs(url: string): Promise<Reader> {
   };
 }
 
-describe("server", () => {
+export async function postSession(
+  s: StartedServer,
+  body: Record<string, unknown> = {},
+): Promise<{ id: string; status: string }> {
+  const res = await fetch(`${s.baseUrl}/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status !== 201) throw new Error(`POST /sessions → ${res.status}: ${await res.text()}`);
+  return (await res.json()) as { id: string; status: string };
+}
+
+describe("server (single session)", () => {
   let s: StartedServer | null = null;
 
   afterEach(async () => {
@@ -124,7 +153,8 @@ describe("server", () => {
 
   test("round-trips a single command", async () => {
     s = await startServer();
-    const r = await openWs(s.url);
+    const { id } = await postSession(s);
+    const r = await openWs(`${s.wsHost}/sessions/${id}`);
     r.ws.send(`{"id":"1","type":"prompt","message":"hi"}`);
     const parsed = JSON.parse(await r.next());
     expect(parsed.type).toBe("response");
@@ -134,10 +164,11 @@ describe("server", () => {
     r.ws.close();
   });
 
-  test("fans out events to multiple clients", async () => {
+  test("fans out events to multiple clients on the same session", async () => {
     s = await startServer();
-    const a = await openWs(s.url);
-    const b = await openWs(s.url);
+    const { id } = await postSession(s);
+    const a = await openWs(`${s.wsHost}/sessions/${id}`);
+    const b = await openWs(`${s.wsHost}/sessions/${id}`);
     a.ws.send(`{"_emit":"chunk"}`);
     const [ra1, ra2, rb1, rb2] = await Promise.all([a.next(), a.next(), b.next(), b.next()]);
     expect(JSON.parse(ra1).n).toBe(1);
@@ -150,7 +181,8 @@ describe("server", () => {
 
   test("splits multi-line stdout chunks into separate ws messages", async () => {
     s = await startServer();
-    const r = await openWs(s.url);
+    const { id } = await postSession(s);
+    const r = await openWs(`${s.wsHost}/sessions/${id}`);
     r.ws.send(`{"_emit":"chunk"}`);
     const m1 = JSON.parse(await r.next());
     const m2 = JSON.parse(await r.next());
@@ -161,7 +193,8 @@ describe("server", () => {
 
   test("buffers a partial stdout line until the newline arrives", async () => {
     s = await startServer();
-    const r = await openWs(s.url);
+    const { id } = await postSession(s);
+    const r = await openWs(`${s.wsHost}/sessions/${id}`);
     r.ws.send(`{"_emit":"split"}`);
     const parsed = JSON.parse(await r.next(3000));
     expect(parsed.type).toBe("split");
@@ -169,15 +202,20 @@ describe("server", () => {
     r.ws.close();
   });
 
-  test("exits non-zero when the agent dies (so systemd restarts the unit)", async () => {
+  test("rejects WS at / with 426", async () => {
     s = await startServer();
-    const r = await openWs(s.url);
-    r.ws.send(`{"_emit":"die"}`);
-    const code = await new Promise<number | null>((resolve) => {
-      s!.proc.once("exit", (c) => resolve(c));
-      setTimeout(() => resolve(null), 5000).unref();
-    });
-    expect(code).toBe(1);
-    s = null;
+    const res = await fetch(`${s.baseUrl}/`);
+    expect(res.status).toBe(426);
+  });
+
+  test("rejects WS for an unknown session id with 404", async () => {
+    s = await startServer();
+    let err: unknown;
+    try {
+      await openWs(`${s.wsHost}/sessions/does-not-exist`);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeDefined();
   });
 });

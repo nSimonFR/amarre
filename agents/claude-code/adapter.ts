@@ -5,11 +5,11 @@
 // stdin and preserves session context across turns.
 
 import { spawn } from "node:child_process";
-import type { AgentAdapter } from "../../server/adapter.ts";
+import type { AgentAdapter, SpawnOpts } from "../../server/adapter.ts";
 
 const adapter: AgentAdapter = {
   name: "claude-code",
-  spawn() {
+  spawn(opts: SpawnOpts = {}) {
     const bin = process.env.CLAUDE_BIN ?? "claude";
     const model = process.env.AMARRE_CLAUDE_MODEL;
     const extra = (process.env.AMARRE_CLAUDE_EXTRA_ARGS ?? "")
@@ -26,7 +26,8 @@ const adapter: AgentAdapter = {
     if (extra.length) args.push(...extra);
     return spawn(bin, args, {
       stdio: ["pipe", "pipe", "inherit"],
-      env: { ...process.env },
+      cwd: opts.cwd,
+      env: { ...process.env, ...(opts.env ?? {}) },
     });
   },
 };
