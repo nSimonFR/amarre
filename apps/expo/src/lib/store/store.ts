@@ -7,6 +7,7 @@ import {
   initialState,
   pushUserMessage,
   reduce,
+  removeSession,
   setConn,
   setCurrentSession,
 } from './reducer';
@@ -47,6 +48,10 @@ class Store {
 
   setCurrentSession(sessionId: string | null): void {
     this.set(setCurrentSession(this.state, sessionId));
+  }
+
+  removeSession(id: string): void {
+    this.set(removeSession(this.state, id));
   }
 
   clearSessionCrashed(): void {

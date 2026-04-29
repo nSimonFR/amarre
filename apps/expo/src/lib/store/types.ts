@@ -44,16 +44,32 @@ export type SessionCrash = {
   signal: string | null;
 };
 
-export type State = {
-  conn: ConnectionState;
+// Per-session chat state. Everything here is keyed by sessionId in State.sessions.
+export type SessionSlice = {
   agent: AgentSnapshot;
   messages: AgentMessage[];
   streaming: StreamingState | null;
   toolExecs: Map<string, ToolExecState>;
   permissionRequests: ExtensionUiRequestEvent[];
-  retry: RetryBanner | null;
-  currentSessionId: string | null;
   sessionCrashed: SessionCrash | null;
+};
+
+export function emptySlice(): SessionSlice {
+  return {
+    agent: { isStreaming: false },
+    messages: [],
+    streaming: null,
+    toolExecs: new Map(),
+    permissionRequests: [],
+    sessionCrashed: null,
+  };
+}
+
+export type State = {
+  conn: ConnectionState;          // top-level — owned by singleton WS, not the agent
+  retry: RetryBanner | null;      // top-level — WS reconnect banner, must survive session switch
+  currentSessionId: string | null;// top-level — cursor selecting which slice the UI reads
+  sessions: Record<string, SessionSlice>;
 };
 
 export type StreamingFinalAssistant = AssistantMessage;

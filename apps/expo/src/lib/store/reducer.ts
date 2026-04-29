@@ -1,6 +1,11 @@
 // Pure (state, event) → state reducer for amarre wire events.
 // Events arrive in the order documented in pi RPC docs; we mutate in patches via Object.assign,
 // returning a fresh top-level State for useSyncExternalStore.
+//
+// INVARIANT: Wire events do not carry `session_id` — they're routed by which WebSocket
+// received them. The store assumes `currentSessionId` is set BEFORE `client.connect(url)`
+// is called, so events for the new session land in the new slice. Violating this invariant
+// routes events to the previous slice. Enforced by `AmarreProvider.connectToSession`.
 
 import type {
   AgentMessage,
@@ -15,24 +20,28 @@ import type {
   UnknownEvent,
 } from '../protocol';
 import { isAmarreSessionEvent, type AmarreSessionEvent } from '../protocol/envelope';
-import type { State, StreamingState } from './types';
+import { emptySlice, type SessionSlice, type State, type StreamingState } from './types';
 
 export function initialState(): State {
   return {
     conn: { status: 'idle', retryCount: 0 },
-    agent: { isStreaming: false },
-    messages: [],
-    streaming: null,
-    toolExecs: new Map(),
-    permissionRequests: [],
     retry: null,
     currentSessionId: null,
-    sessionCrashed: null,
+    sessions: {},
   };
 }
 
 function freshStreaming(): StreamingState {
   return { text: '', thinking: '', toolCallBuffers: new Map(), toolCalls: [] };
+}
+
+// Apply `mut` to the slice for `id`, lazily creating an empty slice if needed.
+// If `id` is null, drop the event silently — defensive: events should never arrive
+// without a current session, but we don't want to crash if they do.
+function withSlice(state: State, id: string | null, mut: (s: SessionSlice) => SessionSlice): State {
+  if (!id) return state;
+  const cur = state.sessions[id] ?? emptySlice();
+  return { ...state, sessions: { ...state.sessions, [id]: mut(cur) } };
 }
 
 function isInteractiveUiMethod(method: string): boolean {
@@ -48,14 +57,23 @@ export function reduce(state: State, event: PiEvent | UnknownEvent): State {
       return reduceResponse(state, event as ResponseEvent);
 
     case 'agent_start':
-      return { ...state, agent: { ...state.agent, isStreaming: true }, streaming: freshStreaming() };
+      return withSlice(state, state.currentSessionId, (prev) => ({
+        ...prev,
+        agent: { ...prev.agent, isStreaming: true },
+        streaming: freshStreaming(),
+      }));
 
     case 'agent_end':
-      return { ...state, agent: { ...state.agent, isStreaming: false } };
+      return withSlice(state, state.currentSessionId, (prev) => ({
+        ...prev,
+        agent: { ...prev.agent, isStreaming: false },
+      }));
 
     case 'turn_start':
       // Make sure streaming buffer exists for this turn.
-      return state.streaming ? state : { ...state, streaming: freshStreaming() };
+      return withSlice(state, state.currentSessionId, (prev) =>
+        prev.streaming ? prev : { ...prev, streaming: freshStreaming() },
+      );
 
     case 'turn_end':
       return reduceTurnEnd(state, event as { type: 'turn_end'; message?: AssistantMessage; toolResults?: ToolResultMessage[] });
@@ -99,35 +117,37 @@ function reduceResponse(state: State, event: ResponseEvent): State {
   if (!event.success) return state;
   if (event.command === 'get_state' && event.data) {
     const data = event.data as GetStateData;
-    return {
-      ...state,
+    return withSlice(state, state.currentSessionId, (prev) => ({
+      ...prev,
       agent: {
         isStreaming: !!data.isStreaming,
         model: data.model,
         sessionId: data.sessionId,
         sessionName: data.sessionName,
       },
-    };
+    }));
   }
   if (event.command === 'get_messages' && event.data) {
     const data = event.data as GetMessagesData;
     const messages = data.messages || [];
-    // Rehydrate toolExecs from any prior toolResult messages so historical tool
-    // outputs render after reconnect.
-    const toolExecs = new Map(state.toolExecs);
-    for (const m of messages) {
-      if (m.role === 'toolResult') {
-        toolExecs.set(m.toolCallId, {
-          toolCallId: m.toolCallId,
-          toolName: m.toolName,
-          args: undefined,
-          status: m.isError ? 'error' : 'done',
-          result: { content: m.content, details: m.details },
-          isError: m.isError,
-        });
+    return withSlice(state, state.currentSessionId, (prev) => {
+      // Rehydrate toolExecs from any prior toolResult messages so historical tool
+      // outputs render after reconnect.
+      const toolExecs = new Map(prev.toolExecs);
+      for (const m of messages) {
+        if (m.role === 'toolResult') {
+          toolExecs.set(m.toolCallId, {
+            toolCallId: m.toolCallId,
+            toolName: m.toolName,
+            args: undefined,
+            status: m.isError ? 'error' : 'done',
+            result: { content: m.content, details: m.details },
+            isError: m.isError,
+          });
+        }
       }
-    }
-    return { ...state, messages, toolExecs };
+      return { ...prev, messages, toolExecs };
+    });
   }
   return state;
 }
@@ -137,138 +157,157 @@ function reduceMessageUpdate(
   event: { type: 'message_update'; assistantMessageEvent: { type: string; delta?: string; toolCall?: { id: string; name: string; arguments: unknown }; contentIndex?: number } },
 ): State {
   const ev = event.assistantMessageEvent;
-  const streaming = state.streaming ?? freshStreaming();
+  return withSlice(state, state.currentSessionId, (prev) => {
+    const streaming = prev.streaming ?? freshStreaming();
 
-  switch (ev.type) {
-    case 'text_delta': {
-      if (!ev.delta) return state;
-      return { ...state, streaming: { ...streaming, text: streaming.text + ev.delta } };
+    switch (ev.type) {
+      case 'text_delta': {
+        if (!ev.delta) return prev;
+        return { ...prev, streaming: { ...streaming, text: streaming.text + ev.delta } };
+      }
+      case 'thinking_delta': {
+        if (!ev.delta) return prev;
+        return { ...prev, streaming: { ...streaming, thinking: streaming.thinking + ev.delta } };
+      }
+      case 'toolcall_start': {
+        const idx = ev.contentIndex ?? streaming.toolCallBuffers.size;
+        const buffers = new Map(streaming.toolCallBuffers);
+        buffers.set(idx, { name: '', argsBuf: '' });
+        return { ...prev, streaming: { ...streaming, toolCallBuffers: buffers } };
+      }
+      case 'toolcall_delta': {
+        if (!ev.delta) return prev;
+        const idx = ev.contentIndex ?? 0;
+        const buffers = new Map(streaming.toolCallBuffers);
+        const cur = buffers.get(idx) ?? { name: '', argsBuf: '' };
+        buffers.set(idx, { ...cur, argsBuf: cur.argsBuf + ev.delta });
+        return { ...prev, streaming: { ...streaming, toolCallBuffers: buffers } };
+      }
+      case 'toolcall_end': {
+        if (!ev.toolCall) return prev;
+        const idx = ev.contentIndex ?? 0;
+        const buffers = new Map(streaming.toolCallBuffers);
+        buffers.delete(idx);
+        return {
+          ...prev,
+          streaming: {
+            ...streaming,
+            toolCallBuffers: buffers,
+            toolCalls: [...streaming.toolCalls, ev.toolCall],
+          },
+        };
+      }
+      default:
+        return prev;
     }
-    case 'thinking_delta': {
-      if (!ev.delta) return state;
-      return { ...state, streaming: { ...streaming, thinking: streaming.thinking + ev.delta } };
-    }
-    case 'toolcall_start': {
-      const idx = ev.contentIndex ?? streaming.toolCallBuffers.size;
-      const buffers = new Map(streaming.toolCallBuffers);
-      buffers.set(idx, { name: '', argsBuf: '' });
-      return { ...state, streaming: { ...streaming, toolCallBuffers: buffers } };
-    }
-    case 'toolcall_delta': {
-      if (!ev.delta) return state;
-      const idx = ev.contentIndex ?? 0;
-      const buffers = new Map(streaming.toolCallBuffers);
-      const cur = buffers.get(idx) ?? { name: '', argsBuf: '' };
-      buffers.set(idx, { ...cur, argsBuf: cur.argsBuf + ev.delta });
-      return { ...state, streaming: { ...streaming, toolCallBuffers: buffers } };
-    }
-    case 'toolcall_end': {
-      if (!ev.toolCall) return state;
-      const idx = ev.contentIndex ?? 0;
-      const buffers = new Map(streaming.toolCallBuffers);
-      buffers.delete(idx);
-      return {
-        ...state,
-        streaming: {
-          ...streaming,
-          toolCallBuffers: buffers,
-          toolCalls: [...streaming.toolCalls, ev.toolCall],
-        },
-      };
-    }
-    default:
-      return state;
-  }
+  });
 }
 
 function reduceToolStart(
   state: State,
   event: { toolCallId: string; toolName: string; args: unknown },
 ): State {
-  const next = new Map(state.toolExecs);
-  next.set(event.toolCallId, {
-    toolCallId: event.toolCallId,
-    toolName: event.toolName,
-    args: event.args,
-    status: 'running',
+  return withSlice(state, state.currentSessionId, (prev) => {
+    const next = new Map(prev.toolExecs);
+    next.set(event.toolCallId, {
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      args: event.args,
+      status: 'running',
+    });
+    return { ...prev, toolExecs: next };
   });
-  return { ...state, toolExecs: next };
 }
 
 function reduceToolUpdate(
   state: State,
   event: { toolCallId: string; partialResult: { content: { type: 'text'; text: string }[]; details?: unknown } },
 ): State {
-  const cur = state.toolExecs.get(event.toolCallId);
-  if (!cur) return state;
-  const next = new Map(state.toolExecs);
-  next.set(event.toolCallId, { ...cur, partial: event.partialResult });
-  return { ...state, toolExecs: next };
+  return withSlice(state, state.currentSessionId, (prev) => {
+    const cur = prev.toolExecs.get(event.toolCallId);
+    if (!cur) return prev;
+    const next = new Map(prev.toolExecs);
+    next.set(event.toolCallId, { ...cur, partial: event.partialResult });
+    return { ...prev, toolExecs: next };
+  });
 }
 
 function reduceToolEnd(
   state: State,
   event: { toolCallId: string; result: { content: { type: 'text'; text: string }[]; details?: unknown }; isError?: boolean },
 ): State {
-  const cur = state.toolExecs.get(event.toolCallId);
-  const next = new Map(state.toolExecs);
-  next.set(event.toolCallId, {
-    toolCallId: event.toolCallId,
-    toolName: cur?.toolName ?? '',
-    args: cur?.args,
-    status: event.isError ? 'error' : 'done',
-    result: event.result,
-    isError: event.isError,
-    partial: cur?.partial,
+  return withSlice(state, state.currentSessionId, (prev) => {
+    const cur = prev.toolExecs.get(event.toolCallId);
+    const next = new Map(prev.toolExecs);
+    next.set(event.toolCallId, {
+      toolCallId: event.toolCallId,
+      toolName: cur?.toolName ?? '',
+      args: cur?.args,
+      status: event.isError ? 'error' : 'done',
+      result: event.result,
+      isError: event.isError,
+      partial: cur?.partial,
+    });
+    return { ...prev, toolExecs: next };
   });
-  return { ...state, toolExecs: next };
 }
 
 function reduceExtensionUiRequest(state: State, event: ExtensionUiRequestEvent): State {
   // Fire-and-forget methods don't go in the queue.
   if (!isInteractiveUiMethod(event.method)) return state;
-  return { ...state, permissionRequests: [...state.permissionRequests, event] };
+  return withSlice(state, state.currentSessionId, (prev) => ({
+    ...prev,
+    permissionRequests: [...prev.permissionRequests, event],
+  }));
 }
 
 function reduceTurnEnd(
   state: State,
   event: { message?: AssistantMessage; toolResults?: ToolResultMessage[] },
 ): State {
-  const appended: AgentMessage[] = [];
+  return withSlice(state, state.currentSessionId, (prev) => {
+    const appended: AgentMessage[] = [];
 
-  if (event.message) {
-    appended.push(event.message);
-  } else if (state.streaming) {
-    // Construct an assistant message from the streamed content.
-    const blocks: AssistantContentBlock[] = [];
-    if (state.streaming.text) blocks.push({ type: 'text', text: state.streaming.text });
-    if (state.streaming.thinking) blocks.push({ type: 'thinking', thinking: state.streaming.thinking });
-    for (const tc of state.streaming.toolCalls) {
-      blocks.push({ type: 'toolCall', id: tc.id, name: tc.name, arguments: tc.arguments });
+    if (event.message) {
+      appended.push(event.message);
+    } else if (prev.streaming) {
+      // Construct an assistant message from the streamed content.
+      const blocks: AssistantContentBlock[] = [];
+      if (prev.streaming.text) blocks.push({ type: 'text', text: prev.streaming.text });
+      if (prev.streaming.thinking) blocks.push({ type: 'thinking', thinking: prev.streaming.thinking });
+      for (const tc of prev.streaming.toolCalls) {
+        blocks.push({ type: 'toolCall', id: tc.id, name: tc.name, arguments: tc.arguments });
+      }
+      if (blocks.length) appended.push({ role: 'assistant', content: blocks });
     }
-    if (blocks.length) appended.push({ role: 'assistant', content: blocks });
-  }
 
-  if (event.toolResults && event.toolResults.length) {
-    for (const tr of event.toolResults) appended.push(tr);
-  }
+    if (event.toolResults && event.toolResults.length) {
+      for (const tr of event.toolResults) appended.push(tr);
+    }
 
-  return {
-    ...state,
-    messages: appended.length ? [...state.messages, ...appended] : state.messages,
-    streaming: null,
-  };
+    return {
+      ...prev,
+      messages: appended.length ? [...prev.messages, ...appended] : prev.messages,
+      streaming: null,
+    };
+  });
 }
 
 // Public helper used by AmarreClient when the user calls connect / disconnect, before any pi event arrives.
 export function pushUserMessage(state: State, text: string): State {
   const msg: AgentMessage = { role: 'user', content: [{ type: 'text', text }] };
-  return { ...state, messages: [...state.messages, msg] };
+  return withSlice(state, state.currentSessionId, (prev) => ({
+    ...prev,
+    messages: [...prev.messages, msg],
+  }));
 }
 
 // Drop a permission request from the queue (called optimistically on Allow/Deny).
 export function dismissPermission(state: State, id: string): State {
-  return { ...state, permissionRequests: state.permissionRequests.filter((r) => r.id !== id) };
+  return withSlice(state, state.currentSessionId, (prev) => ({
+    ...prev,
+    permissionRequests: prev.permissionRequests.filter((r) => r.id !== id),
+  }));
 }
 
 // Connection-state events are pushed by AmarreClient directly into the store.
@@ -276,37 +315,38 @@ export function setConn(state: State, conn: State['conn']): State {
   return { ...state, conn };
 }
 
-// Switching the active session resets every chat-level slice; conn is
-// owned by the WS client lifecycle and stays untouched.
+// Switching the active session is a pure cursor flip — per-session slices keep
+// their own state. The first event for an unknown session id will lazily
+// create an empty slice via withSlice.
 export function setCurrentSession(state: State, sessionId: string | null): State {
   if (state.currentSessionId === sessionId) return state;
-  return {
-    ...state,
-    currentSessionId: sessionId,
-    messages: [],
-    streaming: null,
-    toolExecs: new Map(),
-    permissionRequests: [],
-    retry: null,
-    agent: { isStreaming: false },
-    sessionCrashed: null,
-  };
+  return { ...state, currentSessionId: sessionId };
+}
+
+// Drop a session's slice entirely. If the dropped session is the cursor target,
+// the cursor goes to null so the UI falls back to the empty slice.
+export function removeSession(state: State, id: string): State {
+  if (!(id in state.sessions)) return state;
+  const { [id]: _gone, ...rest } = state.sessions;
+  const cur = state.currentSessionId === id ? null : state.currentSessionId;
+  return { ...state, sessions: rest, currentSessionId: cur };
 }
 
 export function clearSessionCrashed(state: State): State {
-  if (!state.sessionCrashed) return state;
-  return { ...state, sessionCrashed: null };
+  return withSlice(state, state.currentSessionId, (prev) =>
+    prev.sessionCrashed ? { ...prev, sessionCrashed: null } : prev,
+  );
 }
 
 function reduceAmarreSessionEvent(state: State, event: AmarreSessionEvent): State {
   if (event.event !== 'crashed') return state;
-  return {
-    ...state,
+  return withSlice(state, state.currentSessionId, (prev) => ({
+    ...prev,
     sessionCrashed: {
       sessionId: state.currentSessionId ?? '',
       exitCode: event.exitCode ?? null,
       signal: event.signal ?? null,
     },
-    agent: { ...state.agent, isStreaming: false },
-  };
+    agent: { ...prev.agent, isStreaming: false },
+  }));
 }
