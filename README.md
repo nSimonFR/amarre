@@ -14,9 +14,11 @@ Two agent adapters ship in-tree:
 amarre/
 ├── server/                # generic WS ↔ stdio proxy (~80 LOC, Bun)
 ├── agents/                # agent adapter plugins
-│   └── pi/                #   adapter for pi-coding-agent (+ permission-gate ext)
-├── apps/                  # future native / web client apps
-│   └── ios/               #   placeholder
+│   ├── pi/                #   adapter for pi-coding-agent (+ permission-gate ext)
+│   └── claude-code/       #   adapter for Anthropic's claude CLI (stream-json)
+├── apps/                  # native / web client apps
+│   ├── expo/              #   Expo cross-platform client (active)
+│   └── ios/               #   parked SwiftUI placeholder
 ├── tests/fixtures/        # echo-agent + echo-adapter for server tests
 ├── docs/PROTOCOL.md       # full wire-format specification
 ├── flake.nix              # packages.<system>.server + nixosModules.amarre + checks
@@ -31,7 +33,7 @@ See [**docs/PROTOCOL.md**](./docs/PROTOCOL.md) for the full front/back specifica
 
 Layer-summary: WebSocket → JSONL → empty amarre envelope (v1 is a transparent proxy) → agent's own RPC schema (e.g. pi's `docs/rpc.md`).
 
-## Run locally
+## Run locally (with real `pi`)
 
 With real `pi`:
 ```sh
