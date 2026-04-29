@@ -40,6 +40,15 @@ in {
       '';
     };
 
+    maxSessions = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 8;
+      description = ''
+        Maximum number of concurrent agent sessions. POST /sessions returns
+        429 when the cap is reached.
+      '';
+    };
+
     package = lib.mkOption {
       type = lib.types.package;
       default = serverPkg;
@@ -57,6 +66,7 @@ in {
         AMARRE_AGENT = cfg.agent;
         AMARRE_PORT = toString cfg.port;
         AMARRE_HOST = cfg.host;
+        AMARRE_MAX_SESSIONS = toString cfg.maxSessions;
         HOME = "/home/${cfg.user}";
       };
       serviceConfig = {

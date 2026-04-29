@@ -5,15 +5,19 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import type { AgentAdapter } from "../../server/adapter.ts";
+import type { AgentAdapter, SpawnOpts } from "../../server/adapter.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ECHO = resolve(HERE, "echo-agent.sh");
 
 const adapter: AgentAdapter = {
   name: "echo",
-  spawn() {
-    return spawn(ECHO, [], { stdio: ["pipe", "pipe", "inherit"] });
+  spawn(opts: SpawnOpts = {}) {
+    return spawn(ECHO, [], {
+      stdio: ["pipe", "pipe", "inherit"],
+      cwd: opts.cwd,
+      env: { ...process.env, ...(opts.env ?? {}) },
+    });
   },
 };
 

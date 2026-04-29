@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import type { AgentAdapter } from "../../server/adapter.ts";
+import type { AgentAdapter, SpawnOpts } from "../../server/adapter.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PI_BIN = process.env.PI_BIN ?? "pi";
@@ -13,12 +13,13 @@ const PI_GATE = process.env.AMARRE_PI_GATE ?? resolve(HERE, "permission-gate.ts"
 
 const adapter: AgentAdapter = {
   name: "pi",
-  spawn() {
+  spawn(opts: SpawnOpts = {}) {
     const args = ["--mode", "rpc"];
     if (PI_GATE) args.push("-e", PI_GATE);
     return spawn(PI_BIN, args, {
       stdio: ["pipe", "pipe", "inherit"],
-      env: { ...process.env, PI_TELEMETRY: "0" },
+      cwd: opts.cwd,
+      env: { ...process.env, PI_TELEMETRY: "0", ...(opts.env ?? {}) },
     });
   },
 };

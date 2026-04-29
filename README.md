@@ -2,7 +2,7 @@
 
 > French *amarre* — a mooring line. The bit of rope between a boat and the dock.
 
-Tailnet-only WebSocket harness for driving a CLI coding agent (`pi`, `claude-code`, …) from a remote device. Self-hosted analogue of Anthropic's Claude Code Remote Control, no third-party relay.
+Tailnet-only WebSocket harness for driving one or more CLI coding agents (`pi`, `claude-code`, …) from a remote device. Self-hosted analogue of Anthropic's Claude Code Remote Control, no third-party relay. Multi-session: one server hosts up to N agent processes, each addressable by id.
 
 Two agent adapters ship in-tree:
 - [`agents/pi/`](./agents/pi/) — `pi-coding-agent` with a remote permission-approval extension.
@@ -25,26 +25,21 @@ amarre/
 └── module.nix
 ```
 
-The server is **agent-agnostic**: it loads an adapter at startup based on `AMARRE_AGENT` (default `pi`) and proxies JSONL bidirectionally between WebSocket clients and the spawned agent. Agents are plugins under `agents/`. Apps consuming the protocol are separate projects under `apps/`.
+The server is **agent-agnostic**: it loads an adapter at startup based on `AMARRE_AGENT` (default `pi`) and proxies JSONL bidirectionally between WebSocket clients and per-session agent processes. Sessions are spawned/listed/killed via a small REST control plane on the same port. Agents are plugins under `agents/`. Apps consuming the protocol are separate projects under `apps/`.
 
 ## Protocol
 
-See [**docs/PROTOCOL.md**](./docs/PROTOCOL.md) for the full front/back specification — connection, framing, multi-client semantics, permission flow, error handling, conformance checklist, and a worked example.
+See [**docs/PROTOCOL.md**](./docs/PROTOCOL.md) (v2.0.0) for the full front/back specification — REST control plane, WebSocket data plane, framing, multi-client semantics, permission flow, error handling, conformance checklist, and a worked example.
 
-Layer-summary: WebSocket → JSONL → empty amarre envelope (v1 is a transparent proxy) → agent's own RPC schema (e.g. pi's `docs/rpc.md`).
+Layer-summary: HTTP/WebSocket → JSONL → amarre envelope (transparent proxy + one `amarre.session_event`) → agent's own RPC schema (e.g. pi's `docs/rpc.md`).
 
-## Run locally (with real `pi`)
+## Run locally
 
 With real `pi`:
 ```sh
 bun install
-bun test                          # server + adapter tests
+bun test                          # server + multi-session + adapter tests
 PI_BIN=$(which pi) bun run server/server.ts
-```
-Then from another shell:
-```sh
-websocat ws://127.0.0.1:8341/
-{"id":"1","type":"get_state"}
 ```
 
 With real `claude-code`:
@@ -52,10 +47,22 @@ With real `claude-code`:
 AMARRE_AGENT=claude-code CLAUDE_BIN=$(which claude) \
   bun run server/server.ts
 ```
-Then:
+
+Then from another shell — spawn a session, connect to it:
+
 ```sh
-websocat ws://127.0.0.1:8341/
-{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
+ID=$(curl -s -X POST http://127.0.0.1:8341/sessions -d '{}' | jq -r .id)
+websocat ws://127.0.0.1:8341/sessions/$ID
+{"id":"1","type":"get_state"}
+```
+
+Other useful endpoints:
+
+```sh
+curl -s http://127.0.0.1:8341/sessions               # list
+curl -s http://127.0.0.1:8341/sessions/$ID           # status
+curl -s -X POST http://127.0.0.1:8341/sessions/$ID/restart
+curl -s -X DELETE http://127.0.0.1:8341/sessions/$ID
 ```
 
 ## Deploy via NixOS
@@ -64,10 +71,11 @@ Consumed as a flake input (`github:nSimonFR/amarre`). Module:
 
 ```nix
 services.amarre = {
-  enable = true;
-  agent  = "pi";          # default; matches agents/pi/
-  port   = 8341;
-  user   = "nsimon";
+  enable      = true;
+  agent       = "pi";       # default; matches agents/pi/
+  port        = 8341;
+  user        = "nsimon";
+  maxSessions = 8;          # default; cap on concurrent agent processes
 };
 ```
 
@@ -83,4 +91,4 @@ See [apps/README.md](./apps/README.md). Speak the documented protocol — don't 
 
 ## Status
 
-v0.2 — single-session, multi-client, tailnet-only. See `docs/PROTOCOL.md` §9 for planned extensions (multi-session, hello handshake, capability advertisement, push, binary media).
+v0.3 — multi-session, multi-client, tailnet-only (PROTOCOL.md v2.0.0). See `docs/PROTOCOL.md` §9 for planned extensions (state.json rehydrate, hello handshake, capability advertisement, auto-restart, push, binary media, multi-adapter-per-server).
