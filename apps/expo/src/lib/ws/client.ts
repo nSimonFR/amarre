@@ -3,6 +3,7 @@
 // Auto-bootstraps state on (re)connect via get_state + get_messages.
 
 import { isPiEvent, type PiCommand, type WireCommand } from '../protocol';
+import { isAmarreSessionEvent } from '../protocol/envelope';
 import { parseJsonl } from './jsonl';
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed';
@@ -26,6 +27,10 @@ export class AmarreClient {
   private ws: WebSocket | null = null;
   private state: ConnectionState = { status: 'idle', retryCount: 0 };
   private userClosed = false;
+  // Set when an `amarre.session_event` arrives — the upcoming `onclose` is the
+  // tail end of a session crash, not a transient disconnect, so we suppress
+  // backoff retry until the caller explicitly reconnects.
+  private terminated = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private cmdSeq = 0;
 
@@ -33,12 +38,13 @@ export class AmarreClient {
 
   connect(url: string): void {
     this.userClosed = false;
+    this.terminated = false;
     this.clearReconnectTimer();
     if (this.ws) {
       try { this.ws.close(); } catch { /* ignore */ }
       this.ws = null;
     }
-    this.setState({ status: 'connecting', url, retryCount: this.state.retryCount, lastError: undefined });
+    this.setState({ status: 'connecting', url, retryCount: 0, lastError: undefined });
     this.openSocket(url);
   }
 
@@ -105,6 +111,11 @@ export class AmarreClient {
       const data = ev.data;
       if (typeof data !== 'string') return; // binary frames reserved (§3.2)
       for (const record of parseJsonl(data)) {
+        if (isAmarreSessionEvent(record)) {
+          this.terminated = true;
+          this.listeners.onEvent(record);
+          continue;
+        }
         if (isPiEvent(record)) this.listeners.onEvent(record);
       }
     };
@@ -124,7 +135,7 @@ export class AmarreClient {
   }
 
   private handleClose(url: string, error: string | undefined): void {
-    if (this.userClosed) {
+    if (this.userClosed || this.terminated) {
       this.setState({ status: 'closed', url, retryCount: 0, lastError: error });
       return;
     }
@@ -132,7 +143,7 @@ export class AmarreClient {
     const delay = Math.min(BACKOFF_INITIAL_MS * 2 ** (next - 1), BACKOFF_CAP_MS);
     this.setState({ status: 'reconnecting', url, retryCount: next, lastError: error });
     this.reconnectTimer = setTimeout(() => {
-      if (this.userClosed) return;
+      if (this.userClosed || this.terminated) return;
       this.openSocket(url);
     }, delay);
   }

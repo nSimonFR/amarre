@@ -14,6 +14,7 @@ import type {
   ToolResultMessage,
   UnknownEvent,
 } from '../protocol';
+import { isAmarreSessionEvent, type AmarreSessionEvent } from '../protocol/envelope';
 import type { State, StreamingState } from './types';
 
 export function initialState(): State {
@@ -25,6 +26,8 @@ export function initialState(): State {
     toolExecs: new Map(),
     permissionRequests: [],
     retry: null,
+    currentSessionId: null,
+    sessionCrashed: null,
   };
 }
 
@@ -37,6 +40,9 @@ function isInteractiveUiMethod(method: string): boolean {
 }
 
 export function reduce(state: State, event: PiEvent | UnknownEvent): State {
+  if (isAmarreSessionEvent(event)) {
+    return reduceAmarreSessionEvent(state, event);
+  }
   switch (event.type) {
     case 'response':
       return reduceResponse(state, event as ResponseEvent);
@@ -268,4 +274,39 @@ export function dismissPermission(state: State, id: string): State {
 // Connection-state events are pushed by AmarreClient directly into the store.
 export function setConn(state: State, conn: State['conn']): State {
   return { ...state, conn };
+}
+
+// Switching the active session resets every chat-level slice; conn is
+// owned by the WS client lifecycle and stays untouched.
+export function setCurrentSession(state: State, sessionId: string | null): State {
+  if (state.currentSessionId === sessionId) return state;
+  return {
+    ...state,
+    currentSessionId: sessionId,
+    messages: [],
+    streaming: null,
+    toolExecs: new Map(),
+    permissionRequests: [],
+    retry: null,
+    agent: { isStreaming: false },
+    sessionCrashed: null,
+  };
+}
+
+export function clearSessionCrashed(state: State): State {
+  if (!state.sessionCrashed) return state;
+  return { ...state, sessionCrashed: null };
+}
+
+function reduceAmarreSessionEvent(state: State, event: AmarreSessionEvent): State {
+  if (event.event !== 'crashed') return state;
+  return {
+    ...state,
+    sessionCrashed: {
+      sessionId: state.currentSessionId ?? '',
+      exitCode: event.exitCode ?? null,
+      signal: event.signal ?? null,
+    },
+    agent: { ...state.agent, isStreaming: false },
+  };
 }

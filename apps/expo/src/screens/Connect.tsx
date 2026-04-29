@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { AmAvatar } from '../design/atoms/AmAvatar';
@@ -8,14 +8,13 @@ import { AmPhone } from '../design/phone/AmPhone';
 import { useTheme } from '../design/theme/useTheme';
 import { fonts } from '../design/tokens/typography';
 import { radii } from '../design/tokens/radii';
-import { useAmarre } from '../lib/AmarreProvider';
 import {
+  httpBaseUrl,
   loadSettings,
   saveSettings,
-  settingsToUrl,
   type Scheme,
 } from '../lib/persistence/settings';
-import { useConnection } from '../lib/store';
+import { listSessions } from '../lib/rest/sessions';
 
 const DEFAULT_HOST = 'rpi5.gate-mintaka.ts.net';
 const DEFAULT_PORT = '4344';
@@ -23,13 +22,11 @@ const DEFAULT_SCHEME: Scheme = 'wss';
 
 export function Connect() {
   const t = useTheme();
-  const { client } = useAmarre();
-  const conn = useConnection();
   const [host, setHost] = useState(DEFAULT_HOST);
   const [port, setPort] = useState(DEFAULT_PORT);
   const [scheme, setScheme] = useState<Scheme>(DEFAULT_SCHEME);
   const [submitting, setSubmitting] = useState(false);
-  const submittedRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,31 +42,25 @@ export function Connect() {
     };
   }, []);
 
-  // Once we initiate a connect, navigate when the WS opens.
-  useEffect(() => {
-    if (!submittedRef.current) return;
-    if (conn.status === 'open') {
-      submittedRef.current = false;
-      setSubmitting(false);
-      router.replace('/chat');
-    } else if (conn.status === 'closed' || conn.status === 'reconnecting') {
-      // Reconnecting after a failure → surface the error and stop spinner.
-      setSubmitting(false);
-    }
-  }, [conn.status]);
-
   const onContinue = async () => {
     const trimmedHost = host.trim();
     const trimmedPort = port.trim();
     if (!trimmedHost || !trimmedPort) return;
     const settings = { host: trimmedHost, port: trimmedPort, scheme };
-    await saveSettings(settings);
-    submittedRef.current = true;
     setSubmitting(true);
-    client.connect(settingsToUrl(settings));
+    setError(null);
+    try {
+      // Sanity-check the control plane is reachable before persisting.
+      await listSessions(httpBaseUrl(settings));
+      await saveSettings(settings);
+      router.replace('/sessions');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setSubmitting(false);
+    }
   };
 
-  const showError = !submitting && conn.lastError && (conn.status === 'closed' || conn.status === 'reconnecting');
+  const showError = !submitting && !!error;
 
   return (
     <AmPhone>
@@ -116,7 +107,7 @@ export function Connect() {
 
         {showError ? (
           <Text style={[styles.error, { color: t.err }]} numberOfLines={2}>
-            {conn.lastError}
+            {error}
           </Text>
         ) : null}
       </View>
