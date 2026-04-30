@@ -1,69 +1,65 @@
 # claude-code adapter
 
-Adapter for Anthropic's [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI. Spawns:
+Adapter for Anthropic's [Claude Code](https://docs.claude.com/en/docs/claude-code). Three modes, picked by env var:
 
-```
-claude -p \
-  --input-format stream-json \
-  --output-format stream-json \
-  --verbose \
-  --dangerously-skip-permissions \
-  [--model <m>] [<extra-args>...]
-```
+| Mode | Trigger | Wire format on the WS | Permission gate |
+|---|---|---|---|
+| **SDK broker** (default) | none | pi RPC | `canUseTool` → `extension_ui_request{method:"confirm"}` per tool call |
+| Legacy translator | `AMARRE_CLAUDE_LEGACY=1` | pi RPC | none (`--dangerously-skip-permissions`) |
+| Raw passthrough | `AMARRE_CLAUDE_RAW=1` | Claude Code stream-json | none (`--dangerously-skip-permissions`) |
 
-`-p` (`--print`) plus `--input-format stream-json` is Claude Code's documented streaming non-interactive mode: the process reads JSONL `user` records on stdin and emits JSONL events on stdout, staying alive across multiple turns. Session context (LLM history, model, tool use) persists for the lifetime of the process.
+The two legacy modes spawn `claude -p --input-format stream-json --output-format stream-json --verbose --dangerously-skip-permissions [--model …]` directly. The default mode spawns `bun run agents/claude-code/broker.ts`; the broker imports `@anthropic-ai/claude-agent-sdk` and drives [`query()`](https://docs.claude.com/en/docs/claude-code/sdk) under the hood — same `claude` binary, but the SDK exposes `canUseTool`, `interrupt()`, `setModel()`, `setPermissionMode()` as first-class JS callbacks.
 
-## Wire format on the WebSocket
+## Wire format on the WebSocket (default + legacy mode)
 
-By default the adapter wraps the child in a bidirectional **pi RPC ↔ Claude Code stream-json** translator (`./translator.ts`). WS clients targeting this adapter speak the same pi RPC schema they would speak to the `pi` adapter — `prompt`, `steer`, `follow_up`, `abort`, `get_state`, `get_messages`, `extension_ui_response` — and receive `agent_start` / `turn_start` / `message_update` / `tool_execution_*` / `turn_end` / `agent_end` events back.
+WS clients targeting `claude-code` speak the same pi RPC schema they would speak to the `pi` adapter — `prompt`, `steer`, `follow_up`, `abort`, `get_state`, `get_messages`, `extension_ui_response`, plus (broker only) `set_model` and `set_permission_mode` — and receive `agent_start` / `turn_start` / `message_update` / `tool_execution_*` / `turn_end` / `agent_end` events back, plus `extension_ui_request` permission cards.
 
-To bypass the translator and pipe raw stream-json through unchanged (debugging or native Claude Code clients), set `AMARRE_CLAUDE_RAW=1`.
+## What the SDK broker adds vs. legacy translator
+
+- **Permission gating.** Every tool call goes through `canUseTool`. The broker emits `extension_ui_request{method:"confirm"}` and blocks the SDK callback until the WS client returns `extension_ui_response`. No `--dangerously-skip-permissions`; the user is the authorization boundary. Identical envelope shape to pi's `permission-gate.ts`.
+- **Plan-mode capture.** When Claude calls `ExitPlanMode`, the broker captures `input.plan` and broadcasts `extension_ui_request{method:"notify",event:"plan_capture",message:<markdown>}` — no client response required. The SDK callback is auto-denied so Claude waits for follow-up rather than exiting plan mode.
+- **Mid-session controls.** `set_model` and `set_permission_mode` pi commands map to the SDK's `query.setModel(...)` / `query.setPermissionMode(...)`. The legacy translator returns `success:false` for these.
+
+The pi-RPC translation table for the assistant/tool/result events is unchanged from the legacy mode — the broker reuses `translator.ts` to map SDK messages (which share the same JSON envelope shape as stream-json records) to pi events.
 
 ## Files
 
-- `adapter.ts` — `AgentAdapter` factory. Spawns `claude` and (unless `AMARRE_CLAUDE_RAW=1`) wraps it.
-- `translator.ts` — pure functions `translateInbound` / `translateOutbound` over `TranslatorState`. Has no Node.js stream dependencies; trivially unit-testable.
-- `pi-types.ts` — minimal copy of the pi types the translator emits/consumes. Kept local so the adapter has no cross-package dependency on the expo app.
-- `tests/fixtures/fake-claude.sh` — stand-in for the real `claude` binary that replays canned stream-json based on the first inbound `user.message.content[0].text`. Used by the wrapped-adapter tests.
-- `translator.test.ts` — pure-function unit tests.
-- `adapter.test.ts` — raw-mode arg shape + wrapped-mode end-to-end tests via `fake-claude.sh`.
+- `adapter.ts` — `AgentAdapter` factory. Picks broker / legacy / raw based on env. Default is broker.
+- `broker.ts` — Bun script. Imports `@anthropic-ai/claude-agent-sdk`, runs `query()`, translates SDK output via `translator.ts`, wires `canUseTool` to the WS via `extension_ui_request{method:"confirm"}`. Exports `runBroker({stdin, stdout, createQuery})` for unit tests.
+- `translator.ts` — pure functions over `TranslatorState`. Reused by both the legacy adapter and the SDK broker.
+- `pi-types.ts` — minimal copy of the pi event types the translator emits.
+- `broker.test.ts` — bun:test of the broker using a fake `createQuery`. Covers the SDK-driven flows.
+- `translator.test.ts` — pure-function unit tests for the translator.
+- `adapter.test.ts` — spawn-shape tests for raw / legacy / broker mode + end-to-end legacy-mode tests via `fake-claude.sh`.
+- `tests/fixtures/fake-claude.sh` — stand-in for the real `claude` binary; replays canned stream-json. Used by legacy-mode tests.
 
-## Translation table (pi → stream-json on stdin)
+## Permission flow (broker mode)
 
-| pi command | claude stream-json equivalent | notes |
-|---|---|---|
-| `prompt` / `follow_up` | `{type:"user", message:{role:"user", content:[{type:"text", text}, …]}}` | Images map to `{type:"image", source:{type:"base64", media_type, data}}`. |
-| `steer` | same as `follow_up` | Claude Code has no mid-turn steering — v1 emulates by enqueueing as a follow-up to flush *after* the in-flight `result`. Documented gap. |
-| `abort` | `{type:"control_request", request_id:<seq>, request:{subtype:"interrupt"}}` | Drains queued follow-ups + steers. |
-| `get_state` | synthesized response (no roundtrip) | Carries `isStreaming`, `sessionId`, `messageCount`, `pendingMessageCount`. |
-| `get_messages` | synthesized response | Returns the in-process turn history the wrapper has buffered (resets on adapter respawn). |
-| `extension_ui_response` | acknowledged, dropped | We don't issue `extension_ui_request`; permission gating is deferred to v2 (see below). |
-| anything else (`new_session`, `set_model`, `compact`, `bash`, …) | `response{success:false, error:"…not supported by claude-code adapter v1"}` | The expo client should disable the affordance based on the error. |
+```
+                                                 ┌── canUseTool("Bash", {command:"ls"}) ──┐
+SDK ──▶ broker.ts                                ▼                                        │
+                writes to stdout:                                                         │
+                {"type":"extension_ui_request","id":"<uuid>","method":"confirm",          │
+                 "title":"Run Bash?","message":"{\"command\":\"ls\"}"}                    │
+amarre server ─▶ broadcasts to all WS clients of the session                              │
+                                                                                          │
+WS client ──▶ {"type":"extension_ui_response","id":"<same uuid>","confirmed":true}        │
+amarre server ──▶ broker stdin                                                            │
+                                                 resolves canUseTool ─▶ {behavior:"allow"}┘
+```
 
-## Translation table (stream-json → pi on stdout)
-
-| claude record | pi events |
-|---|---|
-| `system{subtype:"init"}` | First arrival → `agent_start` + `turn_start`. Subsequent arrivals (Claude Code re-emits init per turn) → `turn_start` only. |
-| `rate_limit_event` | Dropped (no pi equivalent). |
-| `assistant{message:{content:[blocks]}}` | For each block: `text` → `message_update{assistantMessageEvent:{type:"text_delta", contentIndex, delta}}`; `thinking` → `thinking_delta`; `tool_use` → `toolcall_start` + `toolcall_end` + `tool_execution_start`. |
-| `user{message:{content:[tool_result]}}` | `tool_execution_end{toolCallId, toolName, result, isError}`. Tool name is recovered via the `tool_use_id` map populated when the matching `assistant` block was emitted. |
-| `result{…}` | `turn_end{message, toolResults}` then `agent_end`. Drains queued follow-ups/steers into stdin and re-arms `inFlight`. |
-| `control_request{subtype:"can_use_tool", …}` | Auto-allowed via `control_response` back to claude (defensive — should not fire because of `--dangerously-skip-permissions`). |
-
-## Translation limits (v1)
-
-- **No mid-turn streaming.** Claude Code without `--include-partial-messages` emits whole content blocks per `assistant` record. Each text block becomes one `text_delta` carrying the entire text. The expo UI renders fine but won't show character-by-character streaming.
-- **`steer` is not mid-turn steering.** Pi's `steer` interrupts the assistant mid-response; here we queue and replay after the `result` arrives.
-- **Permission card flow (`extension_ui_request` / `extension_ui_response`) is not wired.** Claude is launched with `--dangerously-skip-permissions`, so every tool call executes without a prompt — the tailnet ACL is the only authorization boundary. To get parity with pi's permission gate we'd swap to `--permission-prompt-tool <mcp>` and ship a small MCP that emits `can_use_tool` requests. Deferred to v2.
-- **Out-of-band history is shallow.** `get_state` and `get_messages` answer with whatever the wrapper has buffered for the *current* claude process. Reconnecting after a crash gives an empty history; the real session log lives inside Claude Code's own state.
+`ExitPlanMode` and `AskUserQuestion` follow the same pattern with `method:"notify"` (no response) and `method:"confirm"` respectively. See `broker.ts` for the exact mapping.
 
 ## Env vars
 
-- `CLAUDE_BIN` — path to the `claude` binary. Defaults to `claude` (PATH-resolved).
-- `AMARRE_CLAUDE_MODEL` (optional) — passed through to `--model`. Useful for forcing `haiku` in dev.
-- `AMARRE_CLAUDE_EXTRA_ARGS` (optional, space-separated) — escape hatch for additional flags, e.g. `--add-dir /home/me/work` or `--mcp-config foo.json`.
-- `AMARRE_CLAUDE_RAW` (optional, `1` to enable) — bypass the translator and emit raw stream-json on the wire.
+- `CLAUDE_BIN` — path to the `claude` binary. Defaults to `claude`. The Nix flake injects `${pkgs.claude-code}/bin/claude`.
+- `AMARRE_BUN_BIN` — path to the `bun` binary used to run the broker. Defaults to `bun`.
+- `AMARRE_CLAUDE_MODEL` (optional) — `--model` for legacy/raw mode; SDK option `model` for broker mode.
+- `AMARRE_CLAUDE_PERMISSION_MODE` (optional, broker mode) — initial SDK `permissionMode`. Values: `"default"` / `"acceptEdits"` / `"bypassPermissions"` / `"plan"`.
+- `AMARRE_CLAUDE_ADDITIONAL_DIRECTORIES` (optional, broker mode, `:`-separated) — paths added to the SDK's `additionalDirectories`.
+- `AMARRE_CLAUDE_EXTRA_ARGS` (optional, legacy/raw mode only, space-separated) — pass-through CLI flags.
+- `AMARRE_CLAUDE_LEGACY=1` — opt back into the stream-json + translator adapter (no SDK).
+- `AMARRE_CLAUDE_RAW=1` — bypass everything; emit raw stream-json on the wire.
 
 ## Why not Anthropic's `--remote-control`?
 

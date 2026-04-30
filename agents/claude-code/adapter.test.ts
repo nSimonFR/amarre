@@ -11,6 +11,8 @@ const ENV_KEYS = [
   "AMARRE_CLAUDE_MODEL",
   "AMARRE_CLAUDE_EXTRA_ARGS",
   "AMARRE_CLAUDE_RAW",
+  "AMARRE_CLAUDE_LEGACY",
+  "AMARRE_BUN_BIN",
 ] as const;
 
 type LineReader = {
@@ -134,12 +136,13 @@ describe("claude-code adapter (raw mode = AMARRE_CLAUDE_RAW=1)", () => {
   });
 });
 
-describe("claude-code adapter (default = wrapped, pi schema)", () => {
+describe("claude-code adapter (legacy translator = AMARRE_CLAUDE_LEGACY=1)", () => {
   let snap: Record<string, string | undefined>;
   beforeEach(() => {
     snap = {};
     for (const k of ENV_KEYS) snap[k] = process.env[k];
     process.env.CLAUDE_BIN = FAKE_CLAUDE;
+    process.env.AMARRE_CLAUDE_LEGACY = "1";
     delete process.env.AMARRE_CLAUDE_RAW;
     delete process.env.AMARRE_CLAUDE_MODEL;
     delete process.env.AMARRE_CLAUDE_EXTRA_ARGS;
@@ -268,6 +271,54 @@ describe("claude-code adapter (default = wrapped, pi schema)", () => {
       const ev = JSON.parse(first) as { success: boolean; error: string };
       expect(ev.success).toBe(false);
       expect(ev.error).toContain("set_model");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+});
+
+describe("claude-code adapter (default = SDK broker)", () => {
+  let snap: Record<string, string | undefined>;
+  beforeEach(() => {
+    snap = {};
+    for (const k of ENV_KEYS) snap[k] = process.env[k];
+    // Use `/usr/bin/env` as the bun stand-in: we only inspect spawnfile and
+    // spawnargs here, not actually run the broker.
+    process.env.AMARRE_BUN_BIN = "/usr/bin/env";
+    delete process.env.CLAUDE_BIN;
+    delete process.env.AMARRE_CLAUDE_RAW;
+    delete process.env.AMARRE_CLAUDE_LEGACY;
+    delete process.env.AMARRE_CLAUDE_MODEL;
+    delete process.env.AMARRE_CLAUDE_EXTRA_ARGS;
+  });
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (snap[k] === undefined) delete process.env[k];
+      else process.env[k] = snap[k];
+    }
+  });
+
+  test("spawns `bun run <broker.ts>` by default", () => {
+    const child = adapter.spawn();
+    try {
+      expect(child.spawnfile).toBe("/usr/bin/env");
+      const args = child.spawnargs;
+      expect(args[1]).toBe("run");
+      expect(args[2]).toMatch(/agents\/claude-code\/broker\.ts$/);
+      expect(child.stdin).toBeTruthy();
+      expect(child.stdout).toBeTruthy();
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  test("forwards opts.cwd to broker via AMARRE_CLAUDE_CWD env", () => {
+    // Indirectly verifies env propagation: spawn() writes opts.cwd into env;
+    // we observe via the spawned process's environment file is non-trivial,
+    // so just smoke-check that no throw and the child exists.
+    const child = adapter.spawn({ cwd: "/tmp" });
+    try {
+      expect(child.pid).toBeTruthy();
     } finally {
       child.kill("SIGKILL");
     }

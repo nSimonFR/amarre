@@ -7,6 +7,9 @@
     "start": "bun run server/server.ts",
     "test": "bun test"
   },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "~0.2.123"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/ws": "^8.5.13",
