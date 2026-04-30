@@ -1,19 +1,39 @@
-// Agent adapter for Anthropic's `claude` CLI. Spawns
-// `claude -p --input-format stream-json --output-format stream-json --verbose
-//  --dangerously-skip-permissions` and wraps it in a bidirectional translator
-// (./translator.ts) so the WS data plane speaks pi RPC instead of Claude
-// Code's stream-json. Set AMARRE_CLAUDE_RAW=1 to bypass translation and pass
-// stream-json through untouched (kept for debugging and clients that target
-// Claude Code natively).
+// Agent adapter for Anthropic's Claude Code. Three modes:
+//
+//   1. Default (SDK broker) — spawns `bun run broker.ts`. The broker imports
+//      `@anthropic-ai/claude-agent-sdk`, drives `query()`, translates SDK
+//      messages into pi RPC frames, and routes `canUseTool` callbacks through
+//      the wire as `extension_ui_request{method:"confirm"}`. No
+//      `--dangerously-skip-permissions`; tool calls are gated by the user.
+//
+//   2. AMARRE_CLAUDE_LEGACY=1 (stream-json + translator) — spawns `claude -p`
+//      directly and wraps it in the bidirectional translator at
+//      ./translator.ts. Same WS contract; no SDK; no permission gate.
+//
+//   3. AMARRE_CLAUDE_RAW=1 (raw passthrough) — spawns `claude -p` and exposes
+//      its stream-json directly on the WS. For debugging or clients that
+//      target Claude Code natively. Pass-through; no translation.
+//
+// Modes 2 + 3 are kept for backward compatibility (mode 2 is what the merged
+// translator-based adapter shipped with) — the SDK broker is the new default.
 
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import { PassThrough, type Readable, type Writable } from "node:stream";
 
 import type { AgentAdapter, AgentChild, SpawnOpts } from "../../server/adapter.ts";
 import { createState, translateInbound, translateOutbound, type TranslateResult } from "./translator.ts";
 
 type RawChild = ChildProcessByStdio<Writable, Readable, null>;
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+// Use the pre-bundled broker (includes @anthropic-ai/claude-agent-sdk inline)
+// when it's available; otherwise fall back to the .ts source. The Nix flake
+// produces the bundle at build time and exports the path via
+// AMARRE_CLAUDE_BROKER. Dev/test runs against the .ts directly.
+const BROKER_PATH = process.env.AMARRE_CLAUDE_BROKER ?? resolve(HERE, "broker.ts");
 
 function spawnRaw(opts: SpawnOpts): RawChild {
   const bin = process.env.CLAUDE_BIN ?? "claude";
@@ -39,17 +59,23 @@ function spawnRaw(opts: SpawnOpts): RawChild {
   });
 }
 
-// Wraps the real claude child so that:
-//   * writes to fake.stdin  → pi-cmd lines parsed by translateInbound; emitted
-//                             stream-json lines are written to real.stdin and
-//                             synthesized pi-event lines are pushed to
-//                             fake.stdout.
-//   * data on real.stdout   → stream-json lines parsed by translateOutbound;
-//                             pi-event lines pushed to fake.stdout, drained
-//                             follow-up lines forwarded to real.stdin.
-// kill, exit, error, close, pid, spawnfile, spawnargs are forwarded so the
-// rest of the server doesn't notice the indirection.
-function wrap(real: RawChild): AgentChild {
+function spawnBroker(opts: SpawnOpts): RawChild {
+  // The broker is a Bun script; the spawned `bun` runs it. Pass the SpawnOpts
+  // cwd to the broker so the SDK's `cwd` option matches the session.
+  const bunBin = process.env.AMARRE_BUN_BIN ?? "bun";
+  const env = { ...process.env, ...(opts.env ?? {}) };
+  if (opts.cwd) env.AMARRE_CLAUDE_CWD = opts.cwd;
+  return spawn(bunBin, ["run", BROKER_PATH], {
+    stdio: ["pipe", "pipe", "inherit"],
+    cwd: opts.cwd,
+    env,
+  });
+}
+
+// Wraps the legacy stream-json child so writes to fake.stdin are translated to
+// stream-json and pushed to real.stdin, and data on real.stdout is translated
+// to pi-RPC and pushed to fake.stdout. See translator.ts for the mapping.
+function wrapLegacy(real: RawChild): AgentChild {
   const state = createState();
   const fakeStdin = new PassThrough();
   const fakeStdout = new PassThrough();
@@ -126,9 +152,11 @@ function wrap(real: RawChild): AgentChild {
 const adapter: AgentAdapter = {
   name: "claude-code",
   spawn(opts: SpawnOpts = {}) {
-    const real = spawnRaw(opts);
-    if (process.env.AMARRE_CLAUDE_RAW === "1") return real;
-    return wrap(real);
+    if (process.env.AMARRE_CLAUDE_RAW === "1") return spawnRaw(opts);
+    if (process.env.AMARRE_CLAUDE_LEGACY === "1") return wrapLegacy(spawnRaw(opts));
+    // Default: SDK broker. Speaks pi RPC on stdio, identical wire to the
+    // legacy translator but with `canUseTool` permission gating.
+    return spawnBroker(opts);
   },
 };
 

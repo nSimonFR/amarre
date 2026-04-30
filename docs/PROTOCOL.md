@@ -8,9 +8,10 @@ This document is normative. If a behaviour is not described here, it is not part
 
 ## 1. Status & versioning
 
-- **Version**: `2.0.0` (this document). The version refers to the *transport* envelope and the *agent-agnostic* surface only. The inner agent payload is governed by the agent's own RPC schema (see §6).
+- **Version**: `2.1.0` (this document). The version refers to the *transport* envelope and the *agent-agnostic* surface only. The inner agent payload is governed by the agent's own RPC schema (see §6).
 - **Breaking changes vs `1.x`**: connecting clients now address a specific session via `/sessions/<id>`; the legacy `wss://host:port/` path is gone (returns `426`). A REST control plane manages session lifecycle. See §4.
-- **Maturity**: multi-session, multi-client. No authentication beyond network-layer (tailnet) ACL. No backwards-compatibility guarantees within `2.x.x` while we collect real-client feedback; expect at most additive changes until `3.0.0`.
+- **Additions vs `2.0.0`** (non-breaking): one server can host multiple named *instances* (different adapter + env per instance) — `POST /sessions` accepts an optional `instanceId`, `GET /instances` lists them, the per-session summary now carries `instanceId`. The `extension_ui_request{method:"notify"}` envelope MAY carry `event:"plan_capture"` (Claude plan-mode markdown). See §4.1 + §6.3.
+- **Maturity**: multi-session, multi-client, multi-instance. No authentication beyond network-layer (tailnet) ACL. No backwards-compatibility guarantees within `2.x.x` while we collect real-client feedback; expect at most additive changes until `3.0.0`.
 - **Stability boundaries**:
   - Changes that REMOVE or RENAME a top-level field, a top-level message `type`, or a REST route, are breaking → bump major.
   - Changes that ADD optional top-level fields, a new `type` value, or a new REST route, are non-breaking → bump minor.
@@ -44,6 +45,7 @@ Layer 4 is the agent's own protocol — for `pi`, that is the schema documented 
 
 ```
 HTTP control plane:
+  GET    /instances                      — list configured instances (id + agent)
   GET    /sessions                       — list sessions
   POST   /sessions                       — spawn a new session
   GET    /sessions/<id>                  — session status
@@ -82,13 +84,28 @@ WebSocket data plane:
 
 ## 4. Session model
 
-### 4.1 Multi-session, multi-client
+### 4.1 Multi-session, multi-client, multi-instance
 
-- A server hosts up to `AMARRE_MAX_SESSIONS` (default 8) concurrent agent processes, each addressed by a distinct session id.
-- All sessions on one server use the same configured adapter (e.g. all `pi`). Mixing adapter types per server is a future extension; for now run two amarre instances on two ports.
-- Any number of clients MAY connect concurrently to the same session. Within a session, the server fans out every Layer 4 event from the agent to every connected client of that session (broadcast). Events from session A do **not** reach clients of session B.
+- A server hosts one or more *instances* (added in v2.1) — each instance is a configured `(adapter, env)` pair with a stable `instanceId`. Examples: `claude_personal`, `claude_work`, `pi`. Servers configured the legacy way (single `AMARRE_AGENT`, no `AMARRE_INSTANCES_JSON`) expose a synthetic instance with id `default`.
+- Per session, the server hosts up to `AMARRE_MAX_SESSIONS` (default 8) concurrent agent processes total across all instances, each addressed by a distinct session id.
+- A session is bound to exactly one instance at spawn time. `POST /sessions {instanceId}` selects which instance handles the session. The instance is stamped on every session summary (`GET /sessions`).
+- Any number of clients MAY connect concurrently to the same session. Within a session, the server fans out every Layer 4 event from the agent to every connected client of that session (broadcast). Events from session A do **not** reach clients of session B (regardless of whether they share an instance).
 - Commands from clients of a session are written to that session's agent stdin in arrival order. The server does not serialize commands per-client; it serializes per-session.
 - The "session" identity (in the agent's sense — its conversation history, current model, etc.) is owned by the agent process and is shared across clients of that session. Use Layer 4 commands like `new_session`, `switch_session`, `fork`, `clone` to manipulate it (§6.1) — these affect only the addressed session.
+
+#### Instances
+
+```
+GET /instances → [{"id":"claude_personal","agent":"claude-code"},
+                  {"id":"claude_work","agent":"claude-code"},
+                  {"id":"pi","agent":"pi"}]
+```
+
+- `id` is server-issued (configured via `AMARRE_INSTANCES_JSON` or `services.amarre.instances`). MUST be unique within a server.
+- `agent` is the adapter name (matches `agents/<name>/adapter.ts`).
+- `POST /sessions` body MAY include `"instanceId"`. Default: the instance named `"default"` if present, otherwise the first configured instance.
+- `POST /sessions` returns `HTTP 404 {"error":"unknown_instance","instanceId":"..."}` if the requested id is not configured.
+- Per-instance env (e.g. `CLAUDE_HOME`, `AMARRE_CLAUDE_MODEL`) is merged into the spawn env *before* the per-session `env` field — session env wins on conflict.
 
 ### 4.2 Lifecycle
 
@@ -98,7 +115,7 @@ spawn → running → crashed → running (after restart)
               stopped (deleted)
 ```
 
-- `POST /sessions` spawns a new agent child and returns the assigned id. Optional body: `{name?, cwd?, env?}`. `cwd` and `env` are passed to the adapter's `SpawnOpts`. Worktree creation is the caller's responsibility — amarre does not run `git worktree add`.
+- `POST /sessions` spawns a new agent child and returns the assigned id. Optional body: `{instanceId?, name?, cwd?, env?}`. `instanceId` selects the instance (§4.1; default `"default"`). `cwd` and `env` are passed to the adapter's `SpawnOpts`. Worktree creation is the caller's responsibility — amarre does not run `git worktree add`.
 - `DELETE /sessions/<id>` sends `SIGTERM` to the child, closes its WebSocket clients with code `1000`, and removes the session from the map.
 - A child exit while status is `running` flips status to `crashed`. The server emits one `amarre.session_event` to the session's clients (§5.4) and closes their WSs with code `1011`. The server process **does not exit** on a per-session crash.
 - `POST /sessions/<id>/restart` re-spawns a crashed/stopped session in place using the original `SpawnOpts`. Returns `409` if the session is already running. Clients MUST reconnect on their own — the WSs from before the crash are not migrated.
@@ -222,6 +239,14 @@ The summary below is non-normative — for any disagreement with pi's docs, pi w
 | `auto_retry_end`        | Retry succeeded or failed terminally.                   |
 | `extension_error`       | An extension threw.                                     |
 | `extension_ui_request`  | Extension asks the user (`select`/`confirm`/`input`/`editor`/`notify`/`setStatus`/`setWidget`/`setTitle`/`set_editor_text`). |
+
+For `method:"notify"` records, an optional `event` discriminant (added v2.1) signals a structured broadcast that does NOT expect an `extension_ui_response`. The agent resolves the underlying request internally — clients render the message but MUST NOT reply. Defined values:
+
+| `event`        | Emitted by    | Meaning                                                                                |
+|----------------|---------------|----------------------------------------------------------------------------------------|
+| `plan_capture` | `claude-code` | Claude entered plan mode and emitted a plan markdown. `message` carries the markdown. |
+
+Clients MUST tolerate unknown `event` values on `notify` records (log + render the `message` field as-is).
 
 ### 6.4 Streaming deltas
 
