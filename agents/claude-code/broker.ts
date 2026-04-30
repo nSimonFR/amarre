@@ -230,7 +230,13 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
   const queryOptions: ClaudeQueryOptions = {
     pathToClaudeCodeExecutable: opts.claudeBin ?? process.env.CLAUDE_BIN ?? "claude",
     canUseTool,
-    includePartialMessages: false,
+    // Stream incremental text/thinking deltas. With this off, each block of
+    // assistant text arrives as one big `text_delta` at block-stop time,
+    // which feels like "no streaming" in the UI. With it on, the SDK emits
+    // `stream_event` records carrying `content_block_delta` events that
+    // `translator.ts:handleStreamEvent` forwards as fine-grained
+    // `message_update.text_delta` / `thinking_delta` frames.
+    includePartialMessages: true,
     // Force every tool call through canUseTool. Two layers must align:
     //   * `settingSources: []` keeps file-based settings (e.g. the user's
     //     `~/.claude/settings.json` `permissions.allow: ["Bash(*)"]`) out of
