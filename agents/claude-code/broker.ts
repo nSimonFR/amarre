@@ -30,6 +30,7 @@ import {
   type PermissionResult,
   type Query,
   type SDKUserMessage,
+  type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 
 import { createState, translateInbound, translateOutbound } from "./translator.ts";
@@ -55,6 +56,23 @@ export interface BrokerOptions {
   readonly cwd?: string;
   /** Extra directories Claude may access. */
   readonly additionalDirectories?: ReadonlyArray<string>;
+  /**
+   * Setting sources the SDK loads at startup. Defaults to `[]` (SDK isolation
+   * mode) so that local file-based `permissions.allow` rules do NOT
+   * pre-approve tool calls — every call goes through `canUseTool` and out to
+   * the WS as `extension_ui_request{method:"confirm"}`. Override via the env
+   * var `AMARRE_CLAUDE_SETTING_SOURCES` (comma-separated: `user,project,local`)
+   * if you trust the local config on this host.
+   */
+  readonly settingSources?: ReadonlyArray<SettingSource>;
+  /**
+   * Permission rules that force tools through `canUseTool` (rather than the
+   * CLI's built-in "is this dangerous?" auto-allow heuristic). Defaults to
+   * `DEFAULT_ASK_RULES` covering the standard Claude Code built-in tools.
+   * Extend via `AMARRE_CLAUDE_ASK_EXTRA` (comma-separated) for plugin/MCP
+   * tools, or override entirely via `AMARRE_CLAUDE_ASK` (comma-separated).
+   */
+  readonly askRules?: ReadonlyArray<string>;
 }
 
 export interface BrokerHandle {
@@ -63,6 +81,27 @@ export interface BrokerHandle {
 }
 
 const PERMISSION_REQUEST_PREVIEW_LIMIT = 400;
+
+// Built-in Claude Code tools that should be gated through canUseTool. Each
+// rule has the form `<ToolName>(<arg-glob>)` per the SDK's permission
+// grammar; the ToolName segment does NOT accept wildcards, so we enumerate.
+const DEFAULT_ASK_RULES: ReadonlyArray<string> = [
+  "Bash(*)",
+  "Edit(*)",
+  "Write(*)",
+  "Read(*)",
+  "Glob(*)",
+  "Grep(*)",
+  "WebFetch(*)",
+  "WebSearch(*)",
+  "NotebookEdit(*)",
+  "Task(*)",
+  "TodoWrite(*)",
+  "AskUserQuestion(*)",
+  "ExitPlanMode(*)",
+  "EnterPlanMode(*)",
+  "Skill(*)",
+];
 
 function preview(value: unknown): string {
   let s: string;
@@ -119,7 +158,17 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
   const create: CreateQuery = opts.createQuery ?? ((p) => defaultQuery(p));
   const state = createState();
   const promptQueue = new PromptQueue();
-  const pendingPermissions = new Map<string, (r: PermissionResult) => void>();
+  // Each pending entry stores the resolver plus the original tool input, so
+  // an `allow` decision can echo the input back via `updatedInput` (the
+  // SDK's PermissionResult Zod schema requires it on the wire even though
+  // the .d.ts marks it optional).
+  const pendingPermissions = new Map<
+    string,
+    {
+      resolve: (r: PermissionResult) => void;
+      input: Record<string, unknown>;
+    }
+  >();
 
   function writeOut(line: string): void {
     stdout.write(line + "\n");
@@ -166,7 +215,7 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
     );
 
     return new Promise<PermissionResult>((resolve) => {
-      pendingPermissions.set(id, resolve);
+      pendingPermissions.set(id, { resolve, input });
       const onAbort = () => {
         if (pendingPermissions.delete(id)) {
           resolve({ behavior: "deny", message: "aborted", interrupt: true });
@@ -176,13 +225,35 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
     });
   };
 
+  const settingSources: ReadonlyArray<SettingSource> = opts.settingSources ?? [];
+  const askRules: ReadonlyArray<string> = opts.askRules ?? DEFAULT_ASK_RULES;
   const queryOptions: ClaudeQueryOptions = {
     pathToClaudeCodeExecutable: opts.claudeBin ?? process.env.CLAUDE_BIN ?? "claude",
     canUseTool,
     includePartialMessages: false,
+    // Force every tool call through canUseTool. Two layers must align:
+    //   * `settingSources: []` keeps file-based settings (e.g. the user's
+    //     `~/.claude/settings.json` `permissions.allow: ["Bash(*)"]`) out of
+    //     the way — otherwise file allows pre-approve and canUseTool is
+    //     skipped entirely.
+    //   * `settings.permissions.ask: ["*"]` tells the CLI subprocess that
+    //     every tool requires a permission prompt; the prompt is then routed
+    //     to our canUseTool callback. Without this, the CLI uses its own
+    //     "is this dangerous?" heuristic and silently auto-allows things
+    //     like `Bash(echo …)`.
+    settingSources: [...settingSources],
+    settings: {
+      // Force every built-in tool through `canUseTool`. The SDK's permission
+      // grammar is `<ToolName>(<arg-glob>)` — wildcards are NOT supported in
+      // the ToolName segment, so we have to enumerate. Keep this list in
+      // sync with the Claude Code CLI's tool registry; missing tools will
+      // silently auto-allow. Extra tools (e.g. plugin / MCP tools) can be
+      // added via `AMARRE_CLAUDE_ASK_EXTRA` (comma-separated).
+      permissions: { allow: [], deny: [], ask: [...askRules] },
+    },
+    permissionMode: opts.permissionMode ?? "default",
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
     ...(opts.model ? { model: opts.model } : {}),
-    ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
     ...(opts.additionalDirectories && opts.additionalDirectories.length > 0
       ? { additionalDirectories: [...opts.additionalDirectories] }
       : {}),
@@ -242,13 +313,13 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
     switch (cmd.type) {
       case "extension_ui_response": {
         const id = typeof cmd.id === "string" ? cmd.id : undefined;
-        const resolve = id ? pendingPermissions.get(id) : undefined;
-        if (id && resolve) {
+        const pending = id ? pendingPermissions.get(id) : undefined;
+        if (id && pending) {
           pendingPermissions.delete(id);
           const confirmed = cmd.confirmed === true;
-          resolve(
+          pending.resolve(
             confirmed
-              ? { behavior: "allow" }
+              ? { behavior: "allow", updatedInput: pending.input }
               : { behavior: "deny", message: "User declined.", interrupt: true },
           );
           ack(cmd.type, cmd.id);
@@ -327,8 +398,8 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
         // ignore — query may already be done
       }
       // Resolve any pending permission requests as denied so the SDK can flush.
-      for (const [id, resolve] of pendingPermissions) {
-        resolve({ behavior: "deny", message: "broker shutting down", interrupt: true });
+      for (const [id, pending] of pendingPermissions) {
+        pending.resolve({ behavior: "deny", message: "broker shutting down", interrupt: true });
         pendingPermissions.delete(id);
       }
       promptQueue.close();
@@ -342,6 +413,22 @@ if (import.meta.main) {
     .split(":")
     .map((s) => s.trim())
     .filter(Boolean);
+  const settingSources = (process.env.AMARRE_CLAUDE_SETTING_SOURCES ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean) as SettingSource[];
+  // ASK rules: env var `AMARRE_CLAUDE_ASK` overrides the default list,
+  // `AMARRE_CLAUDE_ASK_EXTRA` appends to it.
+  const askOverride = (process.env.AMARRE_CLAUDE_ASK ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const askExtra = (process.env.AMARRE_CLAUDE_ASK_EXTRA ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const askRules =
+    askOverride.length > 0 ? askOverride : [...DEFAULT_ASK_RULES, ...askExtra];
   const handle = runBroker({
     stdin: process.stdin,
     stdout: process.stdout,
@@ -351,6 +438,8 @@ if (import.meta.main) {
     permissionMode: process.env.AMARRE_CLAUDE_PERMISSION_MODE as PermissionMode | undefined,
     cwd: process.env.AMARRE_CLAUDE_CWD ?? process.cwd(),
     ...(additional.length > 0 ? { additionalDirectories: additional } : {}),
+    ...(settingSources.length > 0 ? { settingSources } : {}),
+    askRules,
   });
   const shutdown = (sig: NodeJS.Signals) => {
     process.stderr.write(`[broker] received ${sig}, shutting down\n`);
