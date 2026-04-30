@@ -26,6 +26,18 @@ export interface TranslatorState {
   currentTurnToolResults: ToolResultMessage[];
   toolNameByUseId: Map<string, string>;
   history: AgentMessage[];
+  // SDK streaming bookkeeping (only used when the upstream emits
+  // `stream_event` records, i.e. `includePartialMessages: true` mode).
+  // `streamedTextIndices` / `streamedThinkingIndices` track which content-
+  // block indices have already been forwarded as incremental deltas, so
+  // that the final `assistant` record (which carries the full block
+  // content) doesn't double-emit them. `streamedToolUseIndices` does the
+  // same for tool_use blocks; the final `assistant` still emits
+  // `tool_execution_start` since the broker needs the FULLY-PARSED input
+  // (stream_event only carries partial JSON deltas).
+  streamedTextIndices: Set<number>;
+  streamedThinkingIndices: Set<number>;
+  streamedToolUseIndices: Set<number>;
   // inbound bookkeeping
   inFlight: boolean;
   followUpQueue: ClaudeUserRecord[];
@@ -41,6 +53,9 @@ export function createState(): TranslatorState {
     currentTurnToolResults: [],
     toolNameByUseId: new Map(),
     history: [],
+    streamedTextIndices: new Set(),
+    streamedThinkingIndices: new Set(),
+    streamedToolUseIndices: new Set(),
     inFlight: false,
     followUpQueue: [],
     steerQueue: [],
@@ -102,6 +117,23 @@ interface ClaudeControlRequestRecord {
     tool_name?: string;
     input?: unknown;
     [k: string]: unknown;
+  };
+}
+
+// Anthropic streaming events surfaced by the SDK with
+// `includePartialMessages: true`. Wrapped in `{type:"stream_event", event:…}`.
+interface ClaudeStreamEventRecord {
+  type: "stream_event";
+  event?: {
+    type?: string; // "message_start" | "content_block_start" | "content_block_delta" | "content_block_stop" | "message_delta" | "message_stop"
+    index?: number;
+    content_block?: { type?: string; id?: string; name?: string; text?: string };
+    delta?: {
+      type?: string; // "text_delta" | "thinking_delta" | "input_json_delta" | "signature_delta"
+      text?: string;
+      thinking?: string;
+      partial_json?: string;
+    };
   };
 }
 
@@ -257,6 +289,8 @@ export function translateOutbound(rawLine: string, s: TranslatorState): Translat
       return handleUserToolResult(rec as ClaudeUserToolResultRecord, s);
     case "result":
       return handleResult(rec as ClaudeResultRecord, s);
+    case "stream_event":
+      return handleStreamEvent(rec as ClaudeStreamEventRecord, s);
     case "control_request":
       return handleControlRequest(rec as ClaudeControlRequestRecord, s);
     case "control_response":
@@ -318,31 +352,65 @@ function handleSystem(rec: ClaudeSystemInitRecord, s: TranslatorState): Translat
 }
 
 function handleAssistant(rec: ClaudeAssistantRecord, s: TranslatorState): TranslateResult {
+  // The SDK emits one `assistant` record per completed content block (the
+  // record's `message.content` array always has length 1 in streaming mode).
+  // The block's position in the overall turn is `s.contentIndex` — which
+  // matches the `index` field carried on the `stream_event` records that
+  // streamed the block. We dedupe text/thinking deltas against
+  // `s.streamedTextIndices` / `s.streamedThinkingIndices` keyed on
+  // `s.contentIndex`.
   const blocks = rec.message?.content ?? [];
   const out: string[] = [];
-  for (const block of blocks) {
+  blocks.forEach((block) => {
+    const blockIndex = s.contentIndex;
     if (block.type === "text" && typeof block.text === "string") {
-      out.push(
-        JSON.stringify({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", contentIndex: s.contentIndex, delta: block.text },
-        }),
-      );
+      const alreadyStreamed = s.streamedTextIndices.has(blockIndex);
+      if (!alreadyStreamed) {
+        out.push(
+          JSON.stringify({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", contentIndex: s.contentIndex, delta: block.text },
+          }),
+        );
+      } else {
+        out.push(
+          JSON.stringify({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_end", contentIndex: s.contentIndex },
+          }),
+        );
+      }
       s.currentTurnBlocks.push({ type: "text", text: block.text });
       s.contentIndex += 1;
     } else if (block.type === "thinking" && typeof block.thinking === "string") {
-      out.push(
-        JSON.stringify({
-          type: "message_update",
-          assistantMessageEvent: {
-            type: "thinking_delta",
-            contentIndex: s.contentIndex,
-            delta: block.thinking,
-          },
-        }),
-      );
+      const alreadyStreamed = s.streamedThinkingIndices.has(blockIndex);
+      if (!alreadyStreamed) {
+        out.push(
+          JSON.stringify({
+            type: "message_update",
+            assistantMessageEvent: {
+              type: "thinking_delta",
+              contentIndex: s.contentIndex,
+              delta: block.thinking,
+            },
+          }),
+        );
+      } else {
+        out.push(
+          JSON.stringify({
+            type: "message_update",
+            assistantMessageEvent: { type: "thinking_end", contentIndex: s.contentIndex },
+          }),
+        );
+      }
+      s.currentTurnBlocks.push({ type: "thinking", thinking: block.thinking });
       s.contentIndex += 1;
     } else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+      // Tool_use needs the fully-parsed `arguments` for `tool_execution_start`,
+      // which only the assistant record has. The stream_event only carried
+      // partial JSON, so we always emit `toolcall_start` + `toolcall_end` +
+      // `tool_execution_start` here, even if the streamed-tool-use index was
+      // tracked.
       const toolCall = { id: block.id, name: block.name, arguments: block.input };
       out.push(
         JSON.stringify({
@@ -375,8 +443,103 @@ function handleAssistant(rec: ClaudeAssistantRecord, s: TranslatorState): Transl
       s.currentTurnBlocks.push({ type: "toolCall", id: block.id, name: block.name, arguments: block.input });
       s.contentIndex += 1;
     }
-  }
+  });
   return { stdin: [], outbound: out };
+}
+
+function handleStreamEvent(rec: ClaudeStreamEventRecord, s: TranslatorState): TranslateResult {
+  const ev = rec.event;
+  if (!ev || typeof ev.type !== "string") return EMPTY;
+  const out: string[] = [];
+
+  switch (ev.type) {
+    case "content_block_start": {
+      const block = ev.content_block;
+      const idx = typeof ev.index === "number" ? ev.index : -1;
+      if (idx < 0 || !block || typeof block.type !== "string") return EMPTY;
+      // `ev.index` is the block's position in the message-so-far (Anthropic's
+      // streaming spec) and is identical to the `s.contentIndex` value that
+      // `handleAssistant` will assign once the matching `assistant` record
+      // arrives. Use `idx` directly as the pi `contentIndex`.
+      if (block.type === "text") {
+        s.streamedTextIndices.add(idx);
+        out.push(
+          JSON.stringify({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_start", contentIndex: idx },
+          }),
+        );
+      } else if (block.type === "thinking") {
+        s.streamedThinkingIndices.add(idx);
+        out.push(
+          JSON.stringify({
+            type: "message_update",
+            assistantMessageEvent: { type: "thinking_start", contentIndex: idx },
+          }),
+        );
+      } else if (block.type === "tool_use") {
+        s.streamedToolUseIndices.add(idx);
+        // Don't emit toolcall_start here — wait for the assistant record so
+        // we have the parsed arguments for tool_execution_start.
+      }
+      return { stdin: [], outbound: out };
+    }
+    case "content_block_delta": {
+      const delta = ev.delta;
+      const idx = typeof ev.index === "number" ? ev.index : -1;
+      if (idx < 0 || !delta || typeof delta.type !== "string") return EMPTY;
+      if (delta.type === "text_delta" && typeof delta.text === "string") {
+        s.streamedTextIndices.add(idx);
+        out.push(
+          JSON.stringify({
+            type: "message_update",
+            assistantMessageEvent: {
+              type: "text_delta",
+              contentIndex: idx,
+              delta: delta.text,
+            },
+          }),
+        );
+      } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
+        s.streamedThinkingIndices.add(idx);
+        out.push(
+          JSON.stringify({
+            type: "message_update",
+            assistantMessageEvent: {
+              type: "thinking_delta",
+              contentIndex: idx,
+              delta: delta.thinking,
+            },
+          }),
+        );
+      }
+      // input_json_delta and signature_delta are dropped; the parsed
+      // input + signature arrive on the final assistant record.
+      return { stdin: [], outbound: out };
+    }
+    case "message_start": {
+      // Per-turn boundary inside a long-running query session. Reset the
+      // block-tracking state so the next turn's content blocks start from
+      // index 0. handleSystem only fires once at session init; without
+      // this, stream_event indices for turn N would mismatch the running
+      // s.contentIndex carried over from turn N-1, causing duplicate
+      // text/thinking deltas at the wrong contentIndex.
+      s.contentIndex = 0;
+      s.streamedTextIndices.clear();
+      s.streamedThinkingIndices.clear();
+      s.streamedToolUseIndices.clear();
+      s.currentTurnBlocks = [];
+      s.currentTurnToolResults = [];
+      return EMPTY;
+    }
+    case "content_block_stop":
+    case "message_delta":
+    case "message_stop":
+    default:
+      // No pi-event mapping needed — the assistant + result records cover the
+      // matching closing semantics.
+      return EMPTY;
+  }
 }
 
 function handleUserToolResult(

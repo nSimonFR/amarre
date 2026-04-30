@@ -59,7 +59,12 @@ export class AmarreClient {
   }
 
   send(cmd: PiCommand): string {
-    const id = this.nextId();
+    // Preserve a caller-supplied `id` when present — `extension_ui_response`
+    // MUST echo the original `extension_ui_request.id` for the server to
+    // correlate the answer with the pending permission. Auto-generate only
+    // when the caller didn't set one.
+    const provided = (cmd as { id?: unknown }).id;
+    const id = typeof provided === 'string' && provided.length > 0 ? provided : this.nextId();
     const wire: WireCommand = { ...cmd, id };
     if (this.ws && this.ws.readyState === 1 /* OPEN */) {
       this.ws.send(JSON.stringify(wire) + '\n');
