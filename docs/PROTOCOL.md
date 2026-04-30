@@ -8,9 +8,10 @@ This document is normative. If a behaviour is not described here, it is not part
 
 ## 1. Status & versioning
 
-- **Version**: `2.1.0` (this document). The version refers to the *transport* envelope and the *agent-agnostic* surface only. The inner agent payload is governed by the agent's own RPC schema (see §6).
+- **Version**: `2.2.0` (this document). The version refers to the *transport* envelope and the *agent-agnostic* surface only. The inner agent payload is governed by the agent's own RPC schema (see §6).
 - **Breaking changes vs `1.x`**: connecting clients now address a specific session via `/sessions/<id>`; the legacy `wss://host:port/` path is gone (returns `426`). A REST control plane manages session lifecycle. See §4.
 - **Additions vs `2.0.0`** (non-breaking): one server can host multiple named *instances* (different adapter + env per instance) — `POST /sessions` accepts an optional `instanceId`, `GET /instances` lists them, the per-session summary now carries `instanceId`. The `extension_ui_request{method:"notify"}` envelope MAY carry `event:"plan_capture"` (Claude plan-mode markdown). See §4.1 + §6.3.
+- **Additions vs `2.1.0`** (non-breaking): optional push-notification capability — three new REST routes (`/push/tokens`), one new Layer 3 event (`amarre.push_sent`), see §13. Clients and servers without push remain conformant with 2.1.0.
 - **Maturity**: multi-session, multi-client, multi-instance. No authentication beyond network-layer (tailnet) ACL. No backwards-compatibility guarantees within `2.x.x` while we collect real-client feedback; expect at most additive changes until `3.0.0`.
 - **Stability boundaries**:
   - Changes that REMOVE or RENAME a top-level field, a top-level message `type`, or a REST route, are breaking → bump major.
@@ -51,6 +52,10 @@ HTTP control plane:
   GET    /sessions/<id>                  — session status
   DELETE /sessions/<id>                  — stop a session
   POST   /sessions/<id>/restart          — restart a crashed/stopped session
+
+  GET    /push/tokens                    — list registered push tokens   (§13)
+  POST   /push/tokens                    — register an Expo push token    (§13)
+  DELETE /push/tokens/<token>            — unregister a push token        (§13)
 
 WebSocket data plane:
   wss://<host>:<port>/sessions/<id>      — connect to a specific session
@@ -157,7 +162,7 @@ Events (server-to-client records that are not direct command responses) do NOT c
 
 ### 5.4 `amarre.session_event`
 
-The single server-originated Layer 3 message in v2. Sent on the WS of a session whose agent has just exited unexpectedly:
+A server-originated Layer 3 message. Sent on the WS of a session whose agent has just exited unexpectedly:
 
 ```json
 {"type":"amarre.session_event","event":"crashed","exitCode":1,"signal":null}
@@ -168,6 +173,20 @@ The single server-originated Layer 3 message in v2. Sent on the WS of a session 
 - `signal`: signal name (e.g. `"SIGTERM"`) or `null`.
 
 The server emits this to a session's clients **once**, immediately before closing each of their WSs with code `1011`. Clients MUST surface the crash as distinct from a transport-level disconnect.
+
+### 5.5 `amarre.push_sent`
+
+Optional. Emitted on the WS of a session when the server has just dispatched a push notification on its behalf (see §13). Clients connected to the session MAY use this to suppress local toast/notification UI that would otherwise duplicate the OS-level push.
+
+```json
+{"type":"amarre.push_sent","trigger":"awaiting_input","tokens":2,"requestId":"<uuid>"}
+```
+
+- `trigger`: `"awaiting_input" | "crashed"`. Future minor versions MAY add values; clients MUST tolerate unknown ones.
+- `tokens`: integer count of recipient tokens the server attempted to push to.
+- `requestId`: only present when `trigger === "awaiting_input"`; matches the `id` of the originating `extension_ui_request`.
+
+A server without push enabled never emits this. A client that does not understand it MUST log + ignore (per §5.3).
 
 ---
 
@@ -325,7 +344,6 @@ Planned:
 - **State.json rehydrate** — sessions surviving a server restart, recovering `cwd`/`env`/`name` and re-spawning their agents on boot.
 - **Auto-restart-on-crash** — opt-in policy with bounded retries and a circuit breaker.
 - **Authentication beyond tailnet** — bearer-token cookie set after a one-time passcode at `/login`.
-- **Push notifications** — server hits a webhook (e.g. Telegram / iOS push) when an `extension_ui_request` is unanswered for ≥ N seconds.
 - **Binary media channel** — large attachments (screenshots, audio) over binary frames.
 - **Capability advertisement** — adapters declare what they support (e.g. `fork`, `worktree`, `bash`); clients gate UI accordingly.
 - **Multi-adapter-per-server** — one amarre instance hosting `pi` and `claude-code` sessions side by side; needs the hello message to advertise per-session adapter identity.
@@ -413,3 +431,93 @@ A client claiming `2.0.0` conformance MUST:
 - [x] NOT use top-level `type` values starting with `amarre.`.
 
 A client claiming conformance for a specific agent (e.g. `pi`) MUST additionally implement that agent's Layer 4 schema as documented by the agent itself.
+
+The push-notification capability (§13) is OPTIONAL. A 2.1.0-conformant client that does not implement push MUST still tolerate the new `amarre.push_sent` event by logging and ignoring it (already covered by the §5.3 forward-compatibility rule).
+
+---
+
+## 13. Push notifications (optional capability, 2.2.0+)
+
+Push gives the user an OS-level notification on a registered device when a session demands attention while no human-facing client is actively connected. The capability is **optional**: servers MAY refuse to enable it (e.g. configuration disabled, no writable token store), in which case the routes below return `503` and no push is ever sent. Clients MAY skip token registration entirely; the rest of the protocol is unaffected.
+
+### 13.1 Transport
+
+Push is delivered through the **Expo Push Service** (`https://exp.host/--/api/v2/push/send`), which fronts APNs (iOS) and FCM v1 (Android). The amarre server is the sender. Tokens MUST be Expo push tokens (`ExponentPushToken[…]` or `ExpoPushToken[…]`); raw FCM/APNs tokens are not accepted in 2.1.
+
+A server's project id (Expo `projectId`) is configured out-of-band and pinned. Tokens issued under one project id are NOT deliverable through another. Clients MUST register only tokens they obtained against the server's expected project id.
+
+### 13.2 Token registration
+
+```
+POST /push/tokens
+Content-Type: application/json
+
+{
+  "token": "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]",
+  "deviceName": "iPhone 15 Pro",                   // optional, ≤ 64 chars
+  "platform": "ios"                                  // optional: "ios"|"android"|"web"
+}
+```
+
+- `201 Created` body `{token, deviceName, platform, registeredAt}` on first registration.
+- `200 OK` same body if the token was already known (idempotent).
+- `400 invalid_token` if the string fails Expo-token validation.
+- `503 push_disabled` if the server has push disabled or its token store is unwritable.
+
+```
+DELETE /push/tokens/<token>
+```
+
+- `204 No Content` whether or not the token existed (idempotent).
+- `503 push_disabled` if disabled.
+
+```
+GET /push/tokens
+```
+
+- `200 OK` body `[{token, deviceName, platform, registeredAt}, …]`. Intended for debugging / admin clients; servers MAY require additional auth in future versions.
+- `503 push_disabled` if disabled.
+
+The server MUST persist the token list across restarts (file or DB) so that a deploy/reboot does not silently break notifications.
+
+### 13.3 Triggers
+
+Servers MUST support these triggers; both fire to **all** registered tokens (single-tenant tailnet model — multi-user gating is a future extension).
+
+| Trigger | Condition | Debounce |
+|---|---|---|
+| `awaiting_input` | An `extension_ui_request` has been emitted on a session and no `extension_ui_response` matching the same `id` has arrived from any client of that session within `AMARRE_PUSH_GRACE_MS` (default 15 000 ms). | One push per `extension_ui_request.id`. Resolving (any answer) cancels the pending timer. |
+| `crashed` | The session's child has exited and the server is about to broadcast `amarre.session_event` with `event:"crashed"`. | One push per crash event. A subsequent `POST /sessions/<id>/restart` resets state. |
+
+A server SHOULD additionally suppress `awaiting_input` pushes when a client of the session has sent a Layer 4 message within the grace window — the user is clearly at the keyboard and rendering the request locally.
+
+### 13.4 Payload contract
+
+The Expo push payload sent by the server SHALL include:
+
+```json
+{
+  "to": "ExponentPushToken[…]",
+  "title": "amarre · awaiting input",
+  "body": "<short summary, ≤ 100 chars>",
+  "sound": "default",
+  "data": {
+    "amarre": "1",
+    "trigger": "awaiting_input",
+    "sessionId": "<id>",
+    "sessionName": "<name or null>",
+    "requestId": "<uuid, only for awaiting_input>",
+    "method": "<confirm|select|input|editor, only for awaiting_input>"
+  }
+}
+```
+
+Crashed payload omits `requestId`/`method` and uses `trigger: "crashed"`. Clients receiving a tap MUST route on `data.trigger` + `data.sessionId`. The `data.amarre = "1"` discriminator is a fixed string; clients MAY use it to detect amarre-issued pushes vs. unrelated app pushes.
+
+### 13.5 Token housekeeping
+
+When the Expo Push Service returns a `DeviceNotRegistered` ticket or receipt for a token, the server MUST remove that token from its store. Other Expo error codes (`MessageTooBig`, `MessageRateExceeded`, `MismatchSenderId`, `InvalidCredentials`) are logged and the token retained.
+
+### 13.6 Privacy
+
+Push payloads traverse Apple/Google infrastructure outside the tailnet. Servers SHOULD NOT include sensitive command output, file paths, or secrets in `body` or `data`. The default `body` is the tool name and ≤ 100 chars of its argument summary; servers MAY truncate further or redact via configuration.

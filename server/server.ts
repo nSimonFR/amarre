@@ -1,23 +1,34 @@
 // Generic WS ↔ stdin/stdout proxy with multi-session, multi-instance support.
 // Manages N concurrent agent processes, each tied to one named "instance"
 // (e.g. `claude_personal`, `claude_work`, `pi`). REST control plane
-// (GET/POST /sessions, GET/DELETE /sessions/:id, POST /sessions/:id/restart)
-// alongside a per-session WebSocket data plane at /sessions/:id. See
-// docs/PROTOCOL.md (v2.x). One agent crash isolates to its session and
-// broadcasts amarre.session_event to that session's clients only.
+// (GET/POST /sessions, GET/DELETE /sessions/:id, POST /sessions/:id/restart,
+// GET/POST /push/tokens, DELETE /push/tokens/<token>) alongside a per-session
+// WebSocket data plane at /sessions/:id. See docs/PROTOCOL.md (v2.x). One
+// agent crash isolates to its session and broadcasts amarre.session_event to
+// that session's clients only.
 //
 // Instances are configured via AMARRE_INSTANCES_JSON. Backward-compat: if the
 // var is unset, a single instance `default` is synthesized from the legacy
 // AMARRE_AGENT / AMARRE_AGENT_PATH env vars. Existing callers that POST
 // /sessions without `instanceId` always land on `default`.
+//
+// Push notifications (§13) are optional: the server fires a push on
+// extension_ui_request grace timeouts and on session crashes, suppressing the
+// awaiting_input push when a client of that session is actively sending
+// Layer 4 messages.
 
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import type { AgentAdapter, AgentChild, SpawnOpts } from "./adapter.ts";
+import { createPushService, type PushService } from "./push.ts";
 
 const PORT = Number(process.env.AMARRE_PORT ?? 8341);
 const HOST = process.env.AMARRE_HOST ?? "127.0.0.1";
 const MAX_SESSIONS = Number(process.env.AMARRE_MAX_SESSIONS ?? 8);
+const PUSH_TOKENS_PATH = process.env.AMARRE_PUSH_TOKENS_PATH ?? null;
+const PUSH_GRACE_MS = Number(process.env.AMARRE_PUSH_GRACE_MS ?? 15_000);
+const PUSH_EXPO_URL = process.env.AMARRE_PUSH_EXPO_URL;
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 interface InstanceConfig {
@@ -91,6 +102,11 @@ const DEFAULT_INSTANCE_ID = instances.has("default")
   ? "default"
   : instanceConfigs[0].id;
 
+const push: PushService = await createPushService({
+  storePath: PUSH_TOKENS_PATH,
+  expoPushUrl: PUSH_EXPO_URL,
+});
+
 type SessionStatus = "running" | "crashed" | "stopped";
 
 type ClientData = {
@@ -111,6 +127,13 @@ interface SessionHandle {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | null;
   opts: SpawnOpts;
+  // Push state (PROTOCOL §13). pendingPush keys are extension_ui_request ids
+  // for which a grace-window timer is running; clearing the timer means the
+  // request was answered in time. lastInboundMs is the wall-clock of the most
+  // recent client→server WS message — used to suppress awaiting_input pushes
+  // when a human is clearly at the keyboard.
+  pendingPush: Map<string, ReturnType<typeof setTimeout>>;
+  lastInboundMs: number;
 }
 
 const sessions = new Map<string, SessionHandle>();
@@ -150,11 +173,13 @@ function attachChild(h: SessionHandle): void {
       h.buf = h.buf.slice(nl + 1);
       if (line.length === 0) continue;
       for (const c of h.clients) c.send(line);
+      maybeInspectAgentLine(h, line);
     }
   });
   h.child.on("exit", (code, signal) => {
     h.exitCode = code;
     h.exitSignal = signal;
+    cancelAllPendingPush(h);
     if (h.status === "stopped") return; // explicit DELETE — don't broadcast
     h.status = "crashed";
     const evt = JSON.stringify({
@@ -169,6 +194,17 @@ function attachChild(h: SessionHandle): void {
     }
     h.clients.clear();
     console.error(`[amarre] session ${h.id} crashed code=${code} signal=${signal}`);
+    // Crash push fires unconditionally (no grace, no client-active suppression):
+    // a crash is terminal and the user always wants to know.
+    if (push.enabled) {
+      const body = signal
+        ? `session ${h.id} killed by ${signal}`
+        : `session ${h.id} exited code ${code ?? "?"}`;
+      void push.send("crashed", body, {
+        sessionId: h.id,
+        sessionName: h.name ?? null,
+      });
+    }
   });
   h.child.on("error", (err) => {
     console.error(`[amarre] session ${h.id} child error:`, err);
@@ -180,6 +216,79 @@ function mergeEnv(
   sessionEnv?: Record<string, string>,
 ): Record<string, string> {
   return { ...instanceEnv, ...(sessionEnv ?? {}) };
+}
+
+function maybeInspectAgentLine(h: SessionHandle, line: string): void {
+  if (!push.enabled) return;
+  // Cheap pre-filter — skip the JSON.parse for lines that can't be the event
+  // we care about. extension_ui_request payloads are always JSON objects.
+  if (line.length < 20 || line[0] !== "{") return;
+  if (!line.includes(`"extension_ui_request"`)) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (!parsed || typeof parsed !== "object") return;
+  const obj = parsed as Record<string, unknown>;
+  if (obj.type !== "extension_ui_request") return;
+  const requestId = typeof obj.id === "string" ? obj.id : null;
+  if (!requestId || h.pendingPush.has(requestId)) return;
+  const method = typeof obj.method === "string" ? obj.method : "confirm";
+  const title = typeof obj.title === "string" ? obj.title : "";
+  const summary = title || (typeof obj.message === "string" ? obj.message.slice(0, 80) : method);
+  const timer = setTimeout(() => {
+    h.pendingPush.delete(requestId);
+    // Active client suppression — if anyone hammered the WS in the last grace
+    // window, assume they're rendering the request locally and skip the push.
+    if (Date.now() - h.lastInboundMs < PUSH_GRACE_MS) return;
+    void push
+      .send("awaiting_input", `${method}: ${summary}`, {
+        sessionId: h.id,
+        sessionName: h.name ?? null,
+        requestId,
+        method,
+      })
+      .then((tokens) => {
+        if (tokens === 0) return;
+        const evt = JSON.stringify({
+          type: "amarre.push_sent",
+          trigger: "awaiting_input",
+          tokens,
+          requestId,
+        });
+        for (const c of h.clients) c.send(evt);
+      });
+  }, PUSH_GRACE_MS);
+  h.pendingPush.set(requestId, timer);
+}
+
+function cancelPendingPushIfMatch(h: SessionHandle, line: string): void {
+  if (!push.enabled || h.pendingPush.size === 0) return;
+  if (line.length < 20 || line[0] !== "{") return;
+  if (!line.includes(`"extension_ui_response"`)) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (!parsed || typeof parsed !== "object") return;
+  const obj = parsed as Record<string, unknown>;
+  if (obj.type !== "extension_ui_response") return;
+  const requestId = typeof obj.id === "string" ? obj.id : null;
+  if (!requestId) return;
+  const timer = h.pendingPush.get(requestId);
+  if (timer) {
+    clearTimeout(timer);
+    h.pendingPush.delete(requestId);
+  }
+}
+
+function cancelAllPendingPush(h: SessionHandle): void {
+  for (const timer of h.pendingPush.values()) clearTimeout(timer);
+  h.pendingPush.clear();
 }
 
 function spawnSession(
@@ -203,6 +312,8 @@ function spawnSession(
     buf: "",
     spawnedAt: Date.now(),
     opts: mergedOpts,
+    pendingPush: new Map(),
+    lastInboundMs: 0,
   };
   attachChild(h);
   sessions.set(id, h);
@@ -290,6 +401,7 @@ async function handleHttp(req: Request): Promise<Response> {
 
     if (!sub && method === "DELETE") {
       h.status = "stopped";
+      cancelAllPendingPush(h);
       try {
         h.child.kill("SIGTERM");
       } catch {}
@@ -298,6 +410,32 @@ async function handleHttp(req: Request): Promise<Response> {
       sessions.delete(id);
       return new Response(null, { status: 204 });
     }
+  }
+
+  // Push-notification REST surface (PROTOCOL §13.2). All routes return 503
+  // when the service is disabled (no AMARRE_PUSH_TOKENS_PATH or store unwritable).
+  if (path === "/push/tokens") {
+    if (!push.enabled) return jsonResponse({ error: "push_disabled" }, 503);
+    if (method === "GET") return jsonResponse(push.list());
+    if (method === "POST") {
+      const body = await readJsonBody(req);
+      const token = typeof body.token === "string" ? body.token : "";
+      const deviceName = typeof body.deviceName === "string" ? body.deviceName : undefined;
+      const platform =
+        body.platform === "ios" || body.platform === "android" || body.platform === "web"
+          ? body.platform
+          : undefined;
+      const wasKnown = push.list().some((t) => t.token === token);
+      const entry = push.register(token, { deviceName, platform });
+      if (!entry) return jsonResponse({ error: "invalid_token" }, 400);
+      return jsonResponse(entry, wasKnown ? 200 : 201);
+    }
+  }
+  const tokenMatch = path.match(/^\/push\/tokens\/(.+)$/);
+  if (tokenMatch && method === "DELETE") {
+    if (!push.enabled) return jsonResponse({ error: "push_disabled" }, 503);
+    push.unregister(decodeURIComponent(tokenMatch[1]));
+    return new Response(null, { status: 204 });
   }
 
   if (path === "/") {
@@ -350,6 +488,8 @@ const server = Bun.serve<ClientData>({
       const h = sessions.get(ws.data.sessionId);
       if (!h || h.status !== "running") return;
       const text = typeof raw === "string" ? raw : Buffer.from(raw as ArrayBuffer).toString("utf8");
+      h.lastInboundMs = Date.now();
+      cancelPendingPushIfMatch(h, text.trim());
       h.child.stdin.write(text.replace(/\r?\n?$/, "") + "\n");
     },
   },
@@ -373,5 +513,6 @@ process.on("SIGINT", shutdown);
 
 const summary = [...instances.values()].map((r) => `${r.config.id}=${r.adapter.name}`).join(", ");
 console.error(
-  `[amarre] instances=[${summary}] listening on ${server.hostname}:${server.port} (max_sessions=${MAX_SESSIONS})`,
+  `[amarre] instances=[${summary}] listening on ${server.hostname}:${server.port} ` +
+    `(max_sessions=${MAX_SESSIONS}, push=${push.enabled ? `on tokens=${push.list().length}` : "off"})`,
 );
