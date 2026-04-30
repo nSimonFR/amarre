@@ -117,6 +117,32 @@ in {
       '';
     };
 
+    push = {
+      enable = lib.mkEnableOption ''
+        the optional push-notification capability (PROTOCOL §13). When on,
+        the server fires Expo push notifications to registered devices on
+        extension_ui_request grace timeouts and on session crashes.
+      '';
+
+      tokensPath = lib.mkOption {
+        type = lib.types.str;
+        default = "/var/lib/amarre/push-tokens.json";
+        description = ''
+          Path to the JSON file storing registered Expo push tokens.
+          The systemd unit creates `/var/lib/amarre/` via StateDirectory.
+        '';
+      };
+
+      graceMs = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 15000;
+        description = ''
+          Milliseconds to wait for a client to answer an extension_ui_request
+          before firing an awaiting_input push notification.
+        '';
+      };
+    };
+
     package = lib.mkOption {
       type = lib.types.package;
       default = serverPkg;
@@ -137,6 +163,9 @@ in {
         AMARRE_HOST = cfg.host;
         AMARRE_MAX_SESSIONS = toString cfg.maxSessions;
         HOME = "/home/${cfg.user}";
+      } // lib.optionalAttrs cfg.push.enable {
+        AMARRE_PUSH_TOKENS_PATH = cfg.push.tokensPath;
+        AMARRE_PUSH_GRACE_MS = toString cfg.push.graceMs;
       };
       serviceConfig = {
         Type = "simple";
@@ -146,6 +175,10 @@ in {
         ExecStart = "${cfg.package}/bin/amarre-server";
         Restart = "on-failure";
         RestartSec = "5s";
+      } // lib.optionalAttrs cfg.push.enable {
+        # Provision /var/lib/amarre/ owned by cfg.user for the token store.
+        StateDirectory = "amarre";
+        StateDirectoryMode = "0750";
       };
     };
   };
