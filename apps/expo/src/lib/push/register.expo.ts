@@ -43,7 +43,7 @@ const expoDeps: PushDeps = {
     (await Notifications.getExpoPushTokenAsync({ projectId })).data,
   getDeviceName: () => Device.deviceName ?? undefined,
   getPlatform: () => Platform.OS as 'ios' | 'android' | 'web',
-  fetchImpl: (...args) => fetch(...args),
+  fetchImpl: (input, init) => fetch(input, init),
   storage: {
     getItem: (k) => AsyncStorage.getItem(k),
     setItem: (k, v) => AsyncStorage.setItem(k, v),

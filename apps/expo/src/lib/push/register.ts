@@ -7,6 +7,8 @@ import { httpBaseUrl, type Settings } from '../persistence/settings';
 
 export type PermissionStatus = 'granted' | 'denied' | 'undetermined';
 
+export type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>;
+
 export interface PushDeps {
   isWeb: () => boolean;
   isDevice: () => boolean;
@@ -17,7 +19,7 @@ export interface PushDeps {
   getExpoPushToken: (projectId: string) => Promise<string>;
   getDeviceName: () => string | undefined;
   getPlatform: () => 'ios' | 'android' | 'web';
-  fetchImpl: typeof fetch;
+  fetchImpl: FetchImpl;
   storage: {
     getItem: (key: string) => Promise<string | null>;
     setItem: (key: string, value: string) => Promise<void>;
