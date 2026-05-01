@@ -12,26 +12,22 @@ const expectedUrl = 'https://rpi5.test:8343/push/tokens';
 const fakeToken = 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]';
 
 function makeDeps(over: Partial<PushDeps> = {}): PushDeps {
-  const ok = (status = 201) =>
-    mock(() => Promise.resolve(new Response('{}', { status })));
+  const ok = (status = 201) => mock(() => Promise.resolve(new Response('{}', { status })));
+  const granted = (): Promise<'granted'> => Promise.resolve('granted');
   return {
     isWeb: () => false,
     isDevice: () => true,
     getProjectId: () => 'fake-project-id',
     ensureChannel: mock(() => Promise.resolve()),
-    getPermission: mock<PushDeps['getPermission']>(() => Promise.resolve('granted')),
-    requestPermission: mock<PushDeps['requestPermission']>(() =>
-      Promise.resolve('granted'),
-    ),
-    getExpoPushToken: mock<PushDeps['getExpoPushToken']>(() =>
-      Promise.resolve(fakeToken),
-    ),
+    getPermission: mock(granted),
+    requestPermission: mock(granted),
+    getExpoPushToken: mock(() => Promise.resolve(fakeToken)),
     getDeviceName: () => 'iPhone Test',
     getPlatform: () => 'ios',
     fetchImpl: ok(),
     storage: {
-      getItem: mock<PushDeps['storage']['getItem']>(() => Promise.resolve(null)),
-      setItem: mock<PushDeps['storage']['setItem']>(() => Promise.resolve()),
+      getItem: mock(() => Promise.resolve(null as string | null)),
+      setItem: mock(() => Promise.resolve()),
     },
     log: mock(() => {}),
     ...over,
@@ -71,9 +67,11 @@ describe('registerForPushAsync', () => {
   });
 
   test('skips on permission denial without registering or POSTing', async () => {
+    const undetermined = (): Promise<'undetermined'> => Promise.resolve('undetermined');
+    const denied = (): Promise<'denied'> => Promise.resolve('denied');
     const deps = makeDeps({
-      getPermission: mock(() => Promise.resolve('undetermined')),
-      requestPermission: mock(() => Promise.resolve('denied')),
+      getPermission: mock(undetermined),
+      requestPermission: mock(denied),
     });
     const r = await registerForPushAsync(settings, deps);
     expect(r).toEqual({ kind: 'skipped', reason: 'permission-denied' });
