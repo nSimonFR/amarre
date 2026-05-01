@@ -6,7 +6,8 @@ import {
   JetBrainsMono_600SemiBold,
 } from '@expo-google-fonts/jetbrains-mono';
 import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
+import * as Notifications from 'expo-notifications';
+import { router, Stack } from 'expo-router';
 import * as SystemUI from 'expo-system-ui';
 import { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -37,6 +38,24 @@ function Root() {
   );
 }
 
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
+function routeFromResponse(resp: Notifications.NotificationResponse | null) {
+  if (!resp) return;
+  const data = resp.notification.request.content.data as
+    | { amarre?: string; sessionId?: string; trigger?: string }
+    | undefined;
+  if (!data || data.amarre !== '1' || !data.sessionId) return;
+  router.push(`/sessions/${data.sessionId}` as never);
+}
+
 export default function RootLayout() {
   const [loaded] = useFonts({
     Inter_400Regular,
@@ -48,6 +67,12 @@ export default function RootLayout() {
     JetBrainsMono_600SemiBold,
     InstrumentSerif_400Regular_Italic,
   });
+
+  useEffect(() => {
+    Notifications.getLastNotificationResponseAsync().then(routeFromResponse).catch(() => {});
+    const sub = Notifications.addNotificationResponseReceivedListener(routeFromResponse);
+    return () => sub.remove();
+  }, []);
 
   if (!loaded) return null;
 

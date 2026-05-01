@@ -22,6 +22,7 @@ import {
   saveSettings,
   type Scheme,
 } from '../lib/persistence/settings';
+import { registerForPushAsync } from '../lib/push/register.expo';
 import { listSessions } from '../lib/rest/sessions';
 
 const DEFAULT_HOST = 'rpi5.gate-mintaka.ts.net';
@@ -61,6 +62,7 @@ export function Connect() {
       // Sanity-check the control plane is reachable before persisting.
       await listSessions(httpBaseUrl(settings));
       await saveSettings(settings);
+      void registerForPushAsync(settings);
       router.replace('/sessions');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
