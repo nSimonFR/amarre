@@ -1,7 +1,8 @@
-import { createContext, useContext, useMemo, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import { httpBaseUrl, loadSettings, wsUrl } from './persistence/settings';
 import type { PiCommand } from './protocol';
+import { registerForPushAsync } from './push/register.expo';
 import { getSession } from './rest/sessions';
 import { store } from './store';
 import { AmarreClient, type AgentKind } from './ws/client';
@@ -24,6 +25,18 @@ export function AmarreProvider({ children }: { children: ReactNode }) {
       onConnectionChange: (conn) => store.setConn(conn),
     });
   }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const s = await loadSettings();
+      if (!s || cancelled) return;
+      void registerForPushAsync(s);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const value = useMemo<Ctx>(() => {
     const client = clientRef.current!;
