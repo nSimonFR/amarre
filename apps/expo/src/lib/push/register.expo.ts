@@ -25,6 +25,9 @@ function toStatus(s: Notifications.PermissionStatus): PermissionStatus {
 const expoDeps: PushDeps = {
   isWeb: () => Platform.OS === 'web',
   isDevice: () => Device.isDevice,
+  // executionEnvironment === 'storeClient' identifies Expo Go. In that mode
+  // getExpoPushTokenAsync() works without a projectId (Expo's anonymous project).
+  isExpoGo: () => Constants.executionEnvironment === 'storeClient',
   getProjectId: () => {
     const fromExtra = Constants.expoConfig?.extra?.eas?.projectId as string | undefined;
     const fromEas = (Constants as { easConfig?: { projectId?: string } }).easConfig?.projectId;
@@ -39,8 +42,12 @@ const expoDeps: PushDeps = {
   getPermission: async () => toStatus((await Notifications.getPermissionsAsync()).status),
   requestPermission: async () =>
     toStatus((await Notifications.requestPermissionsAsync()).status),
-  getExpoPushToken: async (projectId) =>
-    (await Notifications.getExpoPushTokenAsync({ projectId })).data,
+  getExpoPushToken: async (projectId) => {
+    const res = projectId
+      ? await Notifications.getExpoPushTokenAsync({ projectId })
+      : await Notifications.getExpoPushTokenAsync();
+    return res.data;
+  },
   getDeviceName: () => Device.deviceName ?? undefined,
   getPlatform: () => Platform.OS as 'ios' | 'android' | 'web',
   fetchImpl: (input, init) => fetch(input, init),
