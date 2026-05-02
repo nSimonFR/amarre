@@ -55,8 +55,10 @@
     },
     "extra": {
       "eas": {
-        "projectId": "TODO-eas-project-id"
-      }
-    }
+        "projectId": "78540bb0-bcff-4616-b69c-42342c2247de"
+      },
+      "router": {}
+    },
+    "owner": "nsimon"
   }
 }
