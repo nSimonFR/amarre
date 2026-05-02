@@ -17,11 +17,12 @@ function makeDeps(over: Partial<PushDeps> = {}): PushDeps {
   return {
     isWeb: () => false,
     isDevice: () => true,
+    isExpoGo: () => false,
     getProjectId: () => 'fake-project-id',
     ensureChannel: mock(() => Promise.resolve()),
     getPermission: mock(granted),
     requestPermission: mock(granted),
-    getExpoPushToken: mock(() => Promise.resolve(fakeToken)),
+    getExpoPushToken: mock((_p: string | null) => Promise.resolve(fakeToken)),
     getDeviceName: () => 'iPhone Test',
     getPlatform: () => 'ios',
     fetchImpl: ok(),
@@ -64,6 +65,31 @@ describe('registerForPushAsync', () => {
       makeDeps({ getProjectId: () => 'TODO-eas-project-id' }),
     );
     expect(stub).toEqual({ kind: 'skipped', reason: 'no-project-id' });
+  });
+
+  test('Expo Go: registers without projectId (anonymous Expo project)', async () => {
+    const deps = makeDeps({ isExpoGo: () => true, getProjectId: () => undefined });
+    const r = await registerForPushAsync(settings, deps);
+    expect(r).toEqual({ kind: 'ok', token: fakeToken });
+    expect(deps.fetchImpl).toHaveBeenCalledTimes(1);
+    const arg = (deps.getExpoPushToken as ReturnType<typeof mock>).mock.calls[0]?.[0];
+    expect(arg).toBeNull();
+  });
+
+  test('Expo Go: TODO stub still allowed (passes null to getExpoPushToken)', async () => {
+    const deps = makeDeps({ isExpoGo: () => true, getProjectId: () => 'TODO-eas-project-id' });
+    const r = await registerForPushAsync(settings, deps);
+    expect(r.kind).toBe('ok');
+    const arg = (deps.getExpoPushToken as ReturnType<typeof mock>).mock.calls[0]?.[0];
+    expect(arg).toBeNull();
+  });
+
+  test('dev build: real projectId is forwarded to getExpoPushToken', async () => {
+    const deps = makeDeps({ isExpoGo: () => false, getProjectId: () => 'real-eas-id-abc' });
+    const r = await registerForPushAsync(settings, deps);
+    expect(r.kind).toBe('ok');
+    const arg = (deps.getExpoPushToken as ReturnType<typeof mock>).mock.calls[0]?.[0];
+    expect(arg).toBe('real-eas-id-abc');
   });
 
   test('skips on permission denial without registering or POSTing', async () => {

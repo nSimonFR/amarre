@@ -12,11 +12,12 @@ export type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>
 export interface PushDeps {
   isWeb: () => boolean;
   isDevice: () => boolean;
+  isExpoGo: () => boolean;
   getProjectId: () => string | undefined;
   ensureChannel: () => Promise<void>;
   getPermission: () => Promise<PermissionStatus>;
   requestPermission: () => Promise<PermissionStatus>;
-  getExpoPushToken: (projectId: string) => Promise<string>;
+  getExpoPushToken: (projectId: string | null) => Promise<string>;
   getDeviceName: () => string | undefined;
   getPlatform: () => 'ios' | 'android' | 'web';
   fetchImpl: FetchImpl;
@@ -41,8 +42,14 @@ export async function registerForPushAsync(
   if (deps.isWeb()) return { kind: 'skipped', reason: 'web' };
   if (!deps.isDevice()) return { kind: 'skipped', reason: 'simulator' };
 
-  const projectId = deps.getProjectId();
-  if (!projectId || projectId.startsWith('TODO')) {
+  // Expo Go uses Expo's anonymous project — no projectId required. Dev builds
+  // and standalone apps need a real EAS projectId; the TODO sentinel in
+  // app.json signals it has not been wired yet.
+  const expoGo = deps.isExpoGo();
+  const rawProjectId = deps.getProjectId();
+  const projectId =
+    !rawProjectId || rawProjectId.startsWith('TODO') ? null : rawProjectId;
+  if (!expoGo && !projectId) {
     deps.log('no EAS projectId configured — skipping push registration');
     return { kind: 'skipped', reason: 'no-project-id' };
   }
