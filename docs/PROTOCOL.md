@@ -8,10 +8,11 @@ This document is normative. If a behaviour is not described here, it is not part
 
 ## 1. Status & versioning
 
-- **Version**: `2.2.0` (this document). The version refers to the *transport* envelope and the *agent-agnostic* surface only. The inner agent payload is governed by the agent's own RPC schema (see §6).
+- **Version**: `2.3.0` (this document). The version refers to the *transport* envelope and the *agent-agnostic* surface only. The inner agent payload is governed by the agent's own RPC schema (see §6).
 - **Breaking changes vs `1.x`**: connecting clients now address a specific session via `/sessions/<id>`; the legacy `wss://host:port/` path is gone (returns `426`). A REST control plane manages session lifecycle. See §4.
 - **Additions vs `2.0.0`** (non-breaking): one server can host multiple named *instances* (different adapter + env per instance) — `POST /sessions` accepts an optional `instanceId`, `GET /instances` lists them, the per-session summary now carries `instanceId`. The `extension_ui_request{method:"notify"}` envelope MAY carry `event:"plan_capture"` (Claude plan-mode markdown). See §4.1 + §6.3.
 - **Additions vs `2.1.0`** (non-breaking): optional push-notification capability — three new REST routes (`/push/tokens`), one new Layer 3 event (`amarre.push_sent`), see §13. Clients and servers without push remain conformant with 2.1.0.
+- **Additions vs `2.2.0`** (non-breaking): optional Remote Claude capability — the `claude-code` adapter MAY mirror and accept control from `claude.ai/code`. Four new Layer 3 events (`amarre.remote_attached`, `amarre.remote_inbound`, `amarre.remote_permission_decided`, `amarre.remote_failed`), one new optional field on `extension_ui_request{method:"notify"}` (`event:"permission_resolved"`). See §14. Clients and servers without Remote Claude remain conformant with 2.2.0.
 - **Maturity**: multi-session, multi-client, multi-instance. No authentication beyond network-layer (tailnet) ACL. No backwards-compatibility guarantees within `2.x.x` while we collect real-client feedback; expect at most additive changes until `3.0.0`.
 - **Stability boundaries**:
   - Changes that REMOVE or RENAME a top-level field, a top-level message `type`, or a REST route, are breaking → bump major.
@@ -521,3 +522,116 @@ When the Expo Push Service returns a `DeviceNotRegistered` ticket or receipt for
 ### 13.6 Privacy
 
 Push payloads traverse Apple/Google infrastructure outside the tailnet. Servers SHOULD NOT include sensitive command output, file paths, or secrets in `body` or `data`. The default `body` is the tool name and ≤ 100 chars of its argument summary; servers MAY truncate further or redact via configuration.
+
+---
+
+## 14. Remote Claude (claude.ai/code dual-control, optional capability, 2.3.0+)
+
+Remote Claude is an **adapter-specific** capability of the `claude-code` adapter. When enabled, every spawned session ALSO registers a session against Anthropic's CCR backend (`POST /v1/code/sessions`) so it appears at `claude.ai/code` and the Anthropic mobile app. The amarre WebSocket and `claude.ai/code` are two co-equal control surfaces feeding the same SDK `Query` instance — single source of truth for session state.
+
+The capability is **optional** and **opt-in per server**. Servers MAY ship without it; servers MAY ship with it disabled. The amarre WS protocol is unaffected when it is off — local-only behaviour is identical to 2.2.0.
+
+### 14.1 Architecture
+
+```
+┌──────────────────┐                                         ┌──────────────────┐
+│  amarre client   │ ─── WS / REST ───┐                      │  claude.ai/code  │
+│  (Expo, …)       │                  │                      │  + mobile app    │
+└──────────────────┘                  ▼                      └──────────────────┘
+                              ┌──────────────┐                        ▲
+                              │ amarre server│                        │
+                              └─────┬────────┘                        │
+                                    │ stdio                           │ SSE + HTTP
+                                    ▼                                 │
+                              ┌──────────────┐  bridge transport      │
+                              │   broker     │ ◀──────────────────────┘
+                              │  (this PR)   │  (CCR worker JWT, 4h)
+                              └─────┬────────┘
+                                    │ SDK Query
+                                    ▼
+                              ┌──────────────┐
+                              │  query()     │
+                              │  + claude    │
+                              └──────────────┘
+```
+
+The broker creates the CCR session via `POST /v1/code/sessions`, mints a worker JWT via `POST /v1/code/sessions/{id}/bridge`, and attaches the SDK's `attachBridgeSession` (no `outboundOnly`). Inbound user prompts, permission answers, interrupts, and `set_model` / `set_permission_mode` from `claude.ai/code` are wired to the same SDK Query the amarre WS drives.
+
+### 14.2 Permission arbitration (first-responder wins)
+
+A `canUseTool` callback emits a permission prompt to BOTH surfaces, sharing the same `request_id`:
+
+- amarre WS: `extension_ui_request{method:"confirm",id:<id>,...}` (Layer 3, broadcast to all amarre clients of this session — unchanged from 2.2.0).
+- `claude.ai/code`: `control_request{request_id:<id>,request:{subtype:"can_use_tool",tool_name,input,tool_use_id}}` (CCR transport, sent via the bridge handle).
+
+Whichever surface answers first wins. The losing surface MUST be told to dismiss its prompt:
+
+- If amarre wins (an `extension_ui_response` matching `<id>` arrived from any amarre client): the broker calls `bridge.sendControlCancelRequest(<id>)`; `claude.ai/code` dismisses the prompt.
+- If `claude.ai/code` wins (a `control_response` matching `<id>` arrived from the bridge): the broker emits `extension_ui_request{method:"notify",event:"permission_resolved",id:<id>}` to amarre clients; clients MUST dismiss any locally rendered permission UI for `<id>`.
+
+Late answers from the second responder are dropped silently — the SDK callback has already been resolved.
+
+### 14.3 New Layer 3 events
+
+All four are server-originated; clients MAY render them, MUST tolerate (log + ignore) them if they don't recognise them.
+
+```json
+{"type":"amarre.remote_attached","ccrSessionId":"cse_…","mode":"dual","title":"<host>:<short-id>"}
+```
+
+Emitted once per session right after the bridge handle is ready. Clients MAY surface "this session is also visible on claude.ai" UI.
+
+```json
+{"type":"amarre.remote_inbound","ccrSessionId":"cse_…","source":"claude.ai","content":"<≤400 char preview>"}
+```
+
+Emitted when a user typed a prompt on `claude.ai/code` and the broker enqueued it for the SDK. Clients SHOULD render it as a user-side message in the transcript so amarre users see the conversation continue.
+
+```json
+{"type":"amarre.remote_permission_decided","id":"<request_id>","source":"amarre"|"claude.ai","decision":"allow"|"deny"}
+```
+
+Emitted exactly once per resolved permission prompt that involved both surfaces. Clients use it to dismiss the local prompt UI when the OTHER surface won; clients SHOULD also use it for telemetry.
+
+```json
+{"type":"amarre.remote_failed","ccrSessionId":"cse_…","code":401|4090|4091|null}
+```
+
+Emitted when the bridge transport closes terminally (JWT expiry, epoch superseded, init failure). The amarre WS keeps working — local-only operation continues. Codes match the SDK bridge's `onClose` codes; `null` means SSE reconnect budget exhausted.
+
+### 14.4 New `extension_ui_request{method:"notify"}` event
+
+```json
+{"type":"extension_ui_request","method":"notify","event":"permission_resolved","id":"<request_id>"}
+```
+
+Sent when `claude.ai/code` answered a permission prompt before any amarre client did. Clients with an open confirm UI for `<id>` MUST dismiss it. Servers MAY emit `permission_resolved` even when no remote-resolution actually occurred (idempotent dismissal).
+
+### 14.5 Session summary (REST)
+
+When Remote Claude is enabled and a session has successfully attached, the summary returned by `GET /sessions/<id>` MAY carry an additional optional field:
+
+```json
+{
+  "id": "…",
+  "instanceId": "…",
+  "status": "running",
+  "remote": { "ccrSessionId": "cse_…", "mode": "dual" }
+}
+```
+
+Absent (or null) means Remote Claude is off for this session. Field is purely informational.
+
+### 14.6 Lifecycle
+
+- **Persist on close**: when the amarre session ends (DELETE, crash, or graceful close), the broker drops the bridge transport but does NOT delete the CCR session. The user prunes via `claude.ai/code` (or via a separate `DELETE /v1/code/sessions/<id>` against Anthropic). Rationale: amarre crashes between create-and-delete should not strand orphan sessions, and users may want to keep transcript history on `claude.ai`.
+- **No auto-reconnect**: when the bridge JWT expires (4h) or the worker epoch is superseded, the broker emits `amarre.remote_failed` and stops forwarding. amarre WS continues. A future minor MAY add automatic JWT refresh.
+- **Failure modes**:
+  - Token file unreadable → broker logs once, no `amarre.remote_attached` is emitted, session is local-only.
+  - `createCodeSession` returns `null` → same.
+  - `fetchRemoteCredentials` returns `CredentialsFailure` (`untrusted_device` / `session_stale_relogin`) → broker logs the reason + remediation hint, no `amarre.remote_attached`, session is local-only.
+  - `attachBridgeSession` throws → same as transient.
+
+### 14.7 Privacy
+
+SDK messages forwarded to the bridge include the FULL transcript content: system prompt, tool inputs (file paths, command lines), tool outputs. This is the same content `claude.ai/code` would have if the session had been started natively — Remote Claude does not introduce a new privacy lens. Operators with stricter requirements SHOULD leave the capability disabled.

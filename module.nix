@@ -143,6 +143,69 @@ in {
       };
     };
 
+    remoteClaude = {
+      enable = lib.mkEnableOption ''
+        the optional Remote Claude capability (PROTOCOL §14). When on, every
+        claude-code broker session also registers a `cse_*` session against
+        Anthropic's CCR backend so it appears at claude.ai/code (and the
+        mobile app) and can be observed AND driven from there. amarre stays
+        the primary control plane; both surfaces feed the same SDK Query.
+      '';
+
+      mode = lib.mkOption {
+        type = lib.types.enum [ "dual" ];
+        default = "dual";
+        description = ''
+          Currently only `"dual"` is supported — both surfaces can prompt,
+          approve tools, interrupt, and change model/permission mode.
+        '';
+      };
+
+      tokenPath = lib.mkOption {
+        type = lib.types.str;
+        default = "/run/claude-oauth/token";
+        description = ''
+          Path to the OAuth bearer token file. The token is read on every
+          session spawn; it must be readable by `services.amarre.user`.
+          Defaults to `/run/claude-oauth/token` (mode 0444), which the
+          `claude-remote-control.service` keeps fresh.
+        '';
+      };
+
+      baseUrl = lib.mkOption {
+        type = lib.types.str;
+        default = "https://api.anthropic.com";
+        description = "Anthropic API root used for `POST /v1/code/sessions`.";
+      };
+
+      titlePrefix = lib.mkOption {
+        type = lib.types.str;
+        default = config.networking.hostName;
+        description = ''
+          Prefix for the title that appears on claude.ai/code. Final title
+          is `<prefix>:<short-id>` where short-id is the first 8 chars of
+          the per-session UUID generated inside the broker.
+        '';
+      };
+
+      tags = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ "amarre" ];
+        description = "Tags attached to every CCR session created by the broker.";
+      };
+
+      trustedDeviceTokenPath = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Optional path to a file containing a trusted-device token. Sent
+          as the `X-Trusted-Device-Token` header to the bridge — required
+          when the server's `sessions_elevated_auth_enforcement` flag is on.
+          Leave null on hosts that haven't enrolled.
+        '';
+      };
+    };
+
     package = lib.mkOption {
       type = lib.types.package;
       default = serverPkg;
@@ -166,7 +229,15 @@ in {
       } // lib.optionalAttrs cfg.push.enable {
         AMARRE_PUSH_TOKENS_PATH = cfg.push.tokensPath;
         AMARRE_PUSH_GRACE_MS = toString cfg.push.graceMs;
-      };
+      } // lib.optionalAttrs cfg.remoteClaude.enable ({
+        AMARRE_REMOTE_CLAUDE_MODE = cfg.remoteClaude.mode;
+        AMARRE_REMOTE_CLAUDE_TOKEN_PATH = cfg.remoteClaude.tokenPath;
+        AMARRE_REMOTE_CLAUDE_BASE_URL = cfg.remoteClaude.baseUrl;
+        AMARRE_REMOTE_CLAUDE_TITLE_PREFIX = cfg.remoteClaude.titlePrefix;
+        AMARRE_REMOTE_CLAUDE_TAGS = lib.concatStringsSep "," cfg.remoteClaude.tags;
+      } // lib.optionalAttrs (cfg.remoteClaude.trustedDeviceTokenPath != null) {
+        AMARRE_REMOTE_CLAUDE_TRUSTED_DEVICE_TOKEN_PATH = cfg.remoteClaude.trustedDeviceTokenPath;
+      });
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
