@@ -19,7 +19,12 @@ import type {
   ToolResultMessage,
   UnknownEvent,
 } from '../protocol';
-import { isAmarreSessionEvent, type AmarreSessionEvent } from '../protocol/envelope';
+import {
+  isAmarreRemoteInboundEvent,
+  isAmarreSessionEvent,
+  type AmarreRemoteInboundEvent,
+  type AmarreSessionEvent,
+} from '../protocol/envelope';
 import { emptySlice, type SessionSlice, type State, type StreamingState } from './types';
 
 export function initialState(): State {
@@ -51,6 +56,9 @@ function isInteractiveUiMethod(method: string): boolean {
 export function reduce(state: State, event: PiEvent | UnknownEvent): State {
   if (isAmarreSessionEvent(event)) {
     return reduceAmarreSessionEvent(state, event);
+  }
+  if (isAmarreRemoteInboundEvent(event)) {
+    return reduceAmarreRemoteInbound(state, event);
   }
   switch (event.type) {
     case 'response':
@@ -349,4 +357,12 @@ function reduceAmarreSessionEvent(state: State, event: AmarreSessionEvent): Stat
     },
     agent: { ...prev.agent, isStreaming: false },
   }));
+}
+
+// PROTOCOL §14 — prompt typed on claude.ai/code arriving via the bridge.
+// Render it as if the local user had sent it, so the transcript shows both
+// surfaces of the dual-control session.
+function reduceAmarreRemoteInbound(state: State, event: AmarreRemoteInboundEvent): State {
+  if (!event.content) return state;
+  return pushUserMessage(state, event.content);
 }

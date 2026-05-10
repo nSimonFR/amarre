@@ -174,4 +174,33 @@ describe('reducer — per-session slice', () => {
       content: [{ type: 'text', text: 'hi' }],
     });
   });
+
+  test('amarre.remote_inbound appends a user message to the current slice', () => {
+    let s = initialState();
+    s = setCurrentSession(s, 'A');
+    s = reduce(s, {
+      type: 'amarre.remote_inbound',
+      ccrSessionId: 'cse_test',
+      source: 'claude.ai',
+      content: 'hi from the web',
+    } as unknown as Parameters<typeof reduce>[1]);
+
+    expect(s.sessions['A']!.messages).toHaveLength(1);
+    expect(s.sessions['A']!.messages[0]).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: 'hi from the web' }],
+    });
+  });
+
+  test('amarre.remote_inbound with empty content is a no-op', () => {
+    let s = initialState();
+    s = setCurrentSession(s, 'A');
+    const before = s;
+    s = reduce(s, {
+      type: 'amarre.remote_inbound',
+      source: 'claude.ai',
+      content: '',
+    } as unknown as Parameters<typeof reduce>[1]);
+    expect(s).toBe(before);
+  });
 });
