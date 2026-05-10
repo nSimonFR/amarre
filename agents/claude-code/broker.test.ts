@@ -10,7 +10,14 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  AttachBridgeSessionOptions,
+  BridgeSessionHandle,
+  CredentialsFailure,
+  RemoteCredentials,
+} from "@anthropic-ai/claude-agent-sdk/bridge";
 import { runBroker } from "./broker";
+import type { RemoteControllerDeps } from "./remote";
 
 // --- test helpers ---
 
@@ -335,5 +342,81 @@ describe("broker: SDK driver", () => {
     const result = await decision;
     expect(result.behavior).toBe("deny");
     expect(handle.interruptCalls).toBe(1);
+  });
+
+  test("prompt from amarre WS is mirrored to bridge.write so claude.ai/code sees user messages", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const reader = attachLineReader(stdout);
+    const { create } = makeFakeCreateQuery();
+
+    // Capture every msg the bridge would forward to claude.ai/code.
+    const bridgeWrites: SDKMessage[] = [];
+    const goodCreds: RemoteCredentials = {
+      worker_jwt: "jwt",
+      api_base_url: "https://api.example/test",
+      expires_in: 3600,
+      worker_epoch: 1,
+    };
+    const fakeDeps: RemoteControllerDeps = {
+      createCodeSession: async () => "cse_test",
+      fetchRemoteCredentials: async () => goodCreds,
+      isCredentialsFailure: (r): r is CredentialsFailure =>
+        !!r && (r as CredentialsFailure).terminal === true,
+      attachBridgeSession: async (_o: AttachBridgeSessionOptions) =>
+        ({
+          sessionId: "cse_test",
+          getSequenceNum: () => 0,
+          isConnected: () => true,
+          write: (msg) => bridgeWrites.push(msg),
+          sendResult: () => {},
+          sendControlRequest: () => {},
+          sendControlResponse: () => {},
+          sendControlCancelRequest: () => {},
+          reconnectTransport: () => Promise.resolve(),
+          reportState: () => {},
+          reportMetadata: () => {},
+          reportDelivery: () => {},
+          flush: () => Promise.resolve(),
+          close: () => {},
+        }) as unknown as BridgeSessionHandle,
+      readTextFile: async () => "tok",
+      log: () => {},
+    };
+
+    const broker = runBroker({
+      stdin,
+      stdout,
+      createQuery: create,
+      remote: {
+        mode: "dual",
+        tokenPath: "/tmp/fake",
+        baseUrl: "https://api.example",
+        title: "amarre-test",
+        deps: fakeDeps,
+      },
+    });
+
+    // Wait for the remote controller to attach.
+    while (true) {
+      const ev = (await reader.next()) as { type?: string };
+      if (ev.type === "amarre.remote_attached") break;
+    }
+
+    stdin.write('{"id":"1","type":"prompt","message":"hello from amarre"}\n');
+    const ack = (await reader.next()) as { type: string; success: boolean };
+    expect(ack.type).toBe("response");
+    expect(ack.success).toBe(true);
+
+    // Microtask + a few ticks for the synchronous bridgeWrites.push to land.
+    await new Promise((r) => setTimeout(r, 20));
+
+    const userMsg = bridgeWrites.find((m) => (m as { type?: string }).type === "user");
+    expect(userMsg).toBeDefined();
+    const message = (userMsg as { message: { role: string; content: unknown } }).message;
+    expect(message.role).toBe("user");
+    expect(message.content).toEqual([{ type: "text", text: "hello from amarre" }]);
+
+    await broker.close();
   });
 });

@@ -596,11 +596,19 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
       if (!parsed || parsed.type !== "user" || !parsed.message) continue;
       // The SDK expects `parent_tool_use_id` on every SDKUserMessage; null is
       // fine for top-level user prompts.
-      promptQueue.push({
+      const userMsg: SDKUserMessage = {
         type: "user",
-        message: parsed.message,
+        message: parsed.message as SDKUserMessage["message"],
         parent_tool_use_id: null,
-      } as SDKUserMessage);
+      };
+      promptQueue.push(userMsg);
+      // Mirror to claude.ai/code. The SDK does not echo prompt-iterable items
+      // back on its output stream, so without this the remote UI would only
+      // see assistant replies and never the user's own messages. The bridge
+      // filters echoes on inbound, so no loop.
+      try {
+        remote?.write(userMsg as SDKMessage);
+      } catch {}
     }
   }
 
