@@ -189,6 +189,27 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
     }
   >();
   let remote: RemoteControllerHandle | null = null;
+  // Operations queued before `createRemoteController` resolves. Bridge attach
+  // takes a full HTTP round-trip; the SDK can emit `system`/`assistant`
+  // messages and a client can send a prompt before then. Without buffering,
+  // every pre-attach `remote?.write(...)` is a silent no-op — first turn
+  // gets dropped while subsequent turns mirror normally.
+  // Terminal state: `null` once attach finalizes (success → drained, failure
+  // → discarded). Cap at 256 ops to avoid unbounded growth on a runaway
+  // pre-attach producer.
+  let remoteBuffer: Array<(r: RemoteControllerHandle) => void> | null = [];
+  const REMOTE_BUFFER_CAP = 256;
+  function withRemote(fn: (r: RemoteControllerHandle) => void): void {
+    if (remote) {
+      try {
+        fn(remote);
+      } catch {}
+      return;
+    }
+    if (remoteBuffer && remoteBuffer.length < REMOTE_BUFFER_CAP) {
+      remoteBuffer.push(fn);
+    }
+  }
 
   function writeOut(line: string): void {
     stdout.write(line + "\n");
@@ -233,20 +254,18 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
         message: preview(input),
       }),
     );
-    remote?.reportState("requires_action");
-    if (remote) {
-      const req: SDKControlRequest = {
-        type: "control_request",
-        request_id: id,
-        request: {
-          subtype: "can_use_tool",
-          tool_name: toolName,
-          input,
-          tool_use_id: callback.toolUseID,
-        },
-      };
-      remote.sendControlRequest(req);
-    }
+    withRemote((r) => r.reportState("requires_action"));
+    const req: SDKControlRequest = {
+      type: "control_request",
+      request_id: id,
+      request: {
+        subtype: "can_use_tool",
+        tool_name: toolName,
+        input,
+        tool_use_id: callback.toolUseID,
+      },
+    };
+    withRemote((r) => r.sendControlRequest(req));
 
     return new Promise<PermissionResult>((resolve) => {
       pendingPermissions.set(id, {
@@ -263,9 +282,7 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
           // before either side answered — if claude.ai already won, the
           // response is in flight and a cancel would be a no-op anyway.
           if (pending && pending.source === null) {
-            try {
-              remote?.sendControlCancelRequest(id);
-            } catch {}
+            withRemote((r) => r.sendControlCancelRequest(id));
           }
           resolve({ behavior: "deny", message: "aborted", interrupt: true });
         }
@@ -421,7 +438,16 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
     })
       .then((handle) => {
         remote = handle;
+        // Drain pre-attach buffered ops in arrival order. On null (transient
+        // failure / disabled), discard the buffer — local-only mode.
+        const drained = remoteBuffer ?? [];
+        remoteBuffer = null;
         if (handle) {
+          for (const op of drained) {
+            try {
+              op(handle);
+            } catch {}
+          }
           writeOut(
             JSON.stringify({
               type: "amarre.remote_attached",
@@ -433,6 +459,7 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
         }
       })
       .catch((err: unknown) => {
+        remoteBuffer = null;
         writeErr(
           `remote controller setup failed: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -448,19 +475,15 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
         for (const line of r.outbound) writeOut(line);
         // r.stdin from translateOutbound is `control_response` acks meant for
         // a real claude child; the SDK has no such channel — drop them.
-        try {
-          remote?.write(msg as SDKMessage);
-        } catch {}
+        withRemote((r) => r.write(msg as SDKMessage));
         const t = (msg as { type?: string }).type;
         if (t === "result") {
-          try {
-            remote?.sendResult();
-            remote?.reportState("idle");
-          } catch {}
+          withRemote((r) => {
+            r.sendResult();
+            r.reportState("idle");
+          });
         } else if (t === "user" || t === "assistant") {
-          try {
-            remote?.reportState("running");
-          } catch {}
+          withRemote((r) => r.reportState("running"));
         }
       }
     } catch (err) {
@@ -522,20 +545,18 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
               ? { behavior: "allow", updatedInput: pending.input }
               : { behavior: "deny", message: "User declined.", interrupt: true },
           );
-          // Tell claude.ai its prompt is gone (no double-prompt).
-          if (remote) {
-            try {
-              remote.sendControlCancelRequest(id);
-            } catch {}
-            writeOut(
-              JSON.stringify({
-                type: "amarre.remote_permission_decided",
-                id,
-                source: "amarre",
-                decision: confirmed ? "allow" : "deny",
-              }),
-            );
-          }
+          // Tell claude.ai its prompt is gone (no double-prompt). The
+          // permission_decided notify is unconditional so amarre clients
+          // see arbitration consistently even when bridge isn't attached.
+          withRemote((r) => r.sendControlCancelRequest(id));
+          writeOut(
+            JSON.stringify({
+              type: "amarre.remote_permission_decided",
+              id,
+              source: "amarre",
+              decision: confirmed ? "allow" : "deny",
+            }),
+          );
           ack(cmd.type, cmd.id);
           return;
         }
@@ -605,10 +626,9 @@ export function runBroker(opts: BrokerOptions): BrokerHandle {
       // Mirror to claude.ai/code. The SDK does not echo prompt-iterable items
       // back on its output stream, so without this the remote UI would only
       // see assistant replies and never the user's own messages. The bridge
-      // filters echoes on inbound, so no loop.
-      try {
-        remote?.write(userMsg as SDKMessage);
-      } catch {}
+      // filters echoes on inbound, so no loop. Buffered via `withRemote` so
+      // pre-attach prompts are not silently dropped.
+      withRemote((r) => r.write(userMsg as SDKMessage));
     }
   }
 

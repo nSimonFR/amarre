@@ -419,4 +419,107 @@ describe("broker: SDK driver", () => {
 
     await broker.close();
   });
+
+  test("pre-attach SDK output + user prompts are buffered then flushed on attach (no first-turn loss)", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const reader = attachLineReader(stdout);
+    const { create, handle: sdkHandle } = makeFakeCreateQuery();
+
+    // Hand-cranked attach: resolves only when we call `releaseAttach()`.
+    const bridgeWrites: SDKMessage[] = [];
+    let releaseAttach!: () => void;
+    const attachGate = new Promise<void>((resolve) => {
+      releaseAttach = resolve;
+    });
+    const goodCreds: RemoteCredentials = {
+      worker_jwt: "jwt",
+      api_base_url: "https://api.example/test",
+      expires_in: 3600,
+      worker_epoch: 1,
+    };
+    const fakeDeps: RemoteControllerDeps = {
+      createCodeSession: async () => "cse_test",
+      fetchRemoteCredentials: async () => goodCreds,
+      isCredentialsFailure: (r): r is CredentialsFailure =>
+        !!r && (r as CredentialsFailure).terminal === true,
+      attachBridgeSession: async (_o: AttachBridgeSessionOptions) => {
+        await attachGate;
+        return {
+          sessionId: "cse_test",
+          getSequenceNum: () => 0,
+          isConnected: () => true,
+          write: (msg) => bridgeWrites.push(msg),
+          sendResult: () => {},
+          sendControlRequest: () => {},
+          sendControlResponse: () => {},
+          sendControlCancelRequest: () => {},
+          reconnectTransport: () => Promise.resolve(),
+          reportState: () => {},
+          reportMetadata: () => {},
+          reportDelivery: () => {},
+          flush: () => Promise.resolve(),
+          close: () => {},
+        } as unknown as BridgeSessionHandle;
+      },
+      readTextFile: async () => "tok",
+      log: () => {},
+    };
+
+    const broker = runBroker({
+      stdin,
+      stdout,
+      createQuery: create,
+      remote: {
+        mode: "dual",
+        tokenPath: "/tmp/fake",
+        baseUrl: "https://api.example",
+        title: "amarre-test",
+        deps: fakeDeps,
+      },
+    });
+
+    // Let the broker wire up its SDK iteration loop and stdin handler.
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Pre-attach activity: SDK emits an assistant message + a prompt arrives.
+    sdkHandle.emit({ type: "system", subtype: "init", session_id: "sess-x" } as SDKMessage);
+    sdkHandle.emit({
+      type: "assistant",
+      message: { role: "assistant", model: "claude-opus", content: [{ type: "text", text: "early reply" }] },
+    } as SDKMessage);
+    stdin.write('{"id":"1","type":"prompt","message":"first message"}\n');
+
+    // Drain the broker's amarre-side writeOut (agent_start, turn_start,
+    // message_update, response ack) — these flow regardless of bridge state.
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Nothing should have reached the bridge yet — buffered.
+    expect(bridgeWrites).toEqual([]);
+
+    // Bridge attach completes.
+    releaseAttach();
+
+    // Wait for the amarre.remote_attached notice on amarre stdout.
+    while (true) {
+      const ev = (await reader.next(2000)) as { type?: string };
+      if (ev.type === "amarre.remote_attached") break;
+    }
+
+    // A few ticks for the synchronous drain into bridgeWrites.
+    await new Promise((r) => setTimeout(r, 20));
+
+    const types = bridgeWrites.map((m) => (m as { type?: string }).type);
+    // SDK output (system + assistant) AND the user prompt must all be present.
+    expect(types).toContain("system");
+    expect(types).toContain("assistant");
+    expect(types).toContain("user");
+
+    const userMsg = bridgeWrites.find((m) => (m as { type?: string }).type === "user");
+    const message = (userMsg as { message: { role: string; content: unknown } }).message;
+    expect(message.role).toBe("user");
+    expect(message.content).toEqual([{ type: "text", text: "first message" }]);
+
+    await broker.close();
+  });
 });
