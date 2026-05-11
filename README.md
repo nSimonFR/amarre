@@ -8,6 +8,19 @@ Two agent adapters ship in-tree:
 - [`agents/pi/`](./agents/pi/) — `pi-coding-agent` with a remote permission-approval extension.
 - [`agents/claude-code/`](./agents/claude-code/) — Anthropic's `claude` CLI in stream-json mode (skip-permissions in v1).
 
+## AI Installation Prompt
+
+> Install `amarre` on a host that has Tailscale joined. **Done when** `curl -s http://127.0.0.1:<port>/healthz` returns 200 and the same URL is reachable from another Tailnet-joined device.
+>
+> 1. Clone: `git clone https://github.com/nSimonFR/amarre && cd amarre`
+> 2. Read first: `README.md`, `package.json`, `docs/PROTOCOL.md`. Toolchain is Bun (≥ 1.x); do not substitute `npm` / `pnpm` / `yarn` — `bun.lock` is the lockfile.
+> 3. Install: `bun install`. Verify: `bun run start --help` (or `--version`) returns without error.
+> 4. Configure one or more agent instances. Each instance maps to a CLI binary already on `PATH` (e.g. `pi`, `claude-code`). The minimum config is one instance with `{ agent: "<bin>", port: <num> }`. See `src/` for the loader.
+> 5. Run: `bun run start`. Tail logs and confirm `listening on <port>` appears for each instance.
+> 6. From a remote Tailnet device, connect to `ws://<this-host>:<port>/` and exchange frames per `docs/PROTOCOL.md`.
+> 7. NixOS hosts have a `services.amarre` module — see `module.nix`.
+>
+> **The server binds loopback only by design.** The trust boundary is the Tailscale ACL, not auth tokens. Do not bind to `0.0.0.0` or expose any port publicly.
 ## Layout
 
 ```
@@ -99,23 +112,6 @@ See [agents/README.md](./agents/README.md). Each adapter is a small TypeScript m
 
 See [apps/README.md](./apps/README.md). Speak the documented protocol — don't introduce alternative wire formats.
 
-## Setup for AI coding agents
-
-> Install amarre on a NixOS host with Tailscale enabled:
->
-> 1. Add to flake inputs: `amarre.url = "github:nSimonFR/amarre";`
-> 2. Import `inputs.amarre.nixosModules.amarre` and configure:
->    ```nix
->    services.amarre = {
->      enable = true;
->      instances = {
->        pi = { agent = "pi"; port = 4343; };
->        # claude-code = { agent = "claude-code"; port = 4344; };
->      };
->    };
->    ```
-> 3. `sudo nixos-rebuild switch --flake .#<host>`
-> 4. From a Tailscale-joined remote device, connect to `ws://<host>:<port>/` and send PROTOCOL frames per `docs/PROTOCOL.md`. The server is loopback-only by design; Tailscale ACLs are the trust boundary.
 ## Status
 
 v0.3 — multi-session, multi-client, tailnet-only (PROTOCOL.md v2.0.0). See `docs/PROTOCOL.md` §9 for planned extensions (state.json rehydrate, hello handshake, capability advertisement, auto-restart, push, binary media, multi-adapter-per-server).
