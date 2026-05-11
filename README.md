@@ -13,7 +13,7 @@ Two agent adapters ship in-tree:
 > Install `amarre` on a host that has Tailscale joined. **Done when** `curl -s http://127.0.0.1:<port>/healthz` returns 200 and the same URL is reachable from another Tailnet-joined device.
 >
 > 1. Clone: `git clone https://github.com/nSimonFR/amarre && cd amarre`
-> 2. Read first: `README.md`, `package.json`, `docs/PROTOCOL.md`. Toolchain is Bun (≥ 1.x); do not substitute `npm` / `pnpm` / `yarn` — `bun.lock` is the lockfile.
+> 2. Read first: `SPEC.md` (the load-bearing component-by-component spec for agents — purpose, architecture, REST + WS surface, data model, push flow, env vars, invariants), then `README.md`, `package.json`, and `docs/PROTOCOL.md` for normative wire-format details. Toolchain is Bun (≥ 1.x); do not substitute `npm` / `pnpm` / `yarn` — `bun.lock` is the lockfile.
 > 3. Install: `bun install`. Verify: `bun run start --help` (or `--version`) returns without error.
 > 4. Configure one or more agent instances. Each instance maps to a CLI binary already on `PATH` (e.g. `pi`, `claude-code`). The minimum config is one instance with `{ agent: "<bin>", port: <num> }`. See `src/` for the loader.
 > 5. Run: `bun run start`. Tail logs and confirm `listening on <port>` appears for each instance.
