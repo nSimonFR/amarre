@@ -101,86 +101,21 @@ See [apps/README.md](./apps/README.md). Speak the documented protocol — don't 
 
 ## Setup for AI coding agents
 
-Notes for a Claude Code / Codex / Aider session landing in this repo cold. Read once before touching anything.
-
-### Toolchain
-
-- **Bun** runs everything — no `node`, no `tsc`. `package.json` declares `"type": "module"` and the only `scripts` are `start` (`bun run server/server.ts`) and `test` (`bun test`).
-- TypeScript is consumed directly by Bun; no separate compile step. The Nix flake does run a `bun build` for `agents/claude-code/broker.ts` to ship a self-contained bundle (so the spawned `bun` at runtime needs no `node_modules` lookup against the read-only store) — that's the only build artifact.
-- Runtime dep: `@anthropic-ai/claude-agent-sdk` (drives the Claude Code SDK broker). Dev deps: `@types/bun`, `@types/ws`, `ws`.
-
-### Dev shell
-
-`flake.nix` exists but provides only `packages.<system>.{server,amarreSrc}` + `nixosModules.amarre` + `checks.<system>.tests`. There is **no `devShells` output** — `nix develop` will drop you into a default shell with nothing extra. Install `bun` locally (or `nix shell nixpkgs#bun`) and work from the repo root.
-
-### Common commands
-
-```sh
-bun install                       # populate node_modules from bun.lock
-bun test                          # runs every *.test.ts (server + adapters + push)
-bun run start                     # = bun run server/server.ts
-PI_BIN=$(which pi) bun run start  # local dev with real pi
-```
-
-There is no lint / format script and no CI workflow under `.github/` beyond the Probot `settings.yml`. The Nix `checks.tests` derivation re-runs `bun test` in a sandbox; reproduce it locally with `nix flake check`.
-
-### Test layout
-
-- `server/*.test.ts` — REST control plane, multi-session, multi-instance, push.
-- `agents/<name>/*.test.ts` and `agents/claude-code/tests/` — per-adapter unit tests.
-- `tests/fixtures/` — `echo-agent` + `echo-adapter` used by server tests via `AMARRE_AGENT_PATH`.
-
-When adding a new adapter, drop a colocated `adapter.test.ts` asserting that `spawn()` returns a child with open stdin/stdout pipes and round-trips at least one JSONL line.
-
-### Adding a new agent backend
-
-The extension point is `agents/<name>/adapter.ts`, exporting `default` as an `AgentAdapter` (`{ name, spawn(opts?) }`) from `server/adapter.ts`. The server resolves it via `AMARRE_AGENT=<name>` (or `AMARRE_AGENT_PATH=<absolute path>` for tests/fixtures). Spawned child must accept JSONL on stdin and emit JSONL on stdout — see [`agents/README.md`](./agents/README.md) for the full contract (steps 1–5).
-
-### Tailscale dependency
-
-amarre is **loopback-only by design** — `server.ts` reads `AMARRE_HOST` (default `127.0.0.1`) and `AMARRE_PORT` (default `8341`). Exposure is delegated to `tailscale serve` on the host (typically proxied to HTTPS on the tailnet). The server itself doesn't authenticate clients; it trusts the tailnet ACL. There are no Tailscale env vars / scopes / OAuth tokens read by the server — pure socket binding. The NixOS module sets `HOME=/home/${user}` so the spawned agents read the configured user's `~/.pi/`, `~/.claude/`, etc.
-
-### GitHub workflow (hard rules)
-
-- **Every `gh` and `git push` op MUST run under the `nSimonFR-ai` GitHub account.** Switch first: `gh auth switch -u nSimonFR-ai`. Never use the personal `nSimonFR` account from agent sessions.
-- Create feature branches off `main` and open a PR — do not push directly to `main`. The repo enforces `enforce_admins: true` on `main` (see `.github/settings.yml`).
-- Merge style is **rebase-merge only** (`allow_squash_merge: false`, `allow_merge_commit: false`).
-
-### Commit message conventions
-
-Conventional-commit-style with a scope, lowercase imperative. Scopes seen in `git log` include `expo`, `module`, `push`, `broker`, `claude-code`, `protocol`, `hub`, `permission`, `chat`, `composer`, `connect`, `lib`. Use `feat:` for new behaviour, `feat!:` for a breaking protocol bump, `fix:` for bug fixes, `chore:` for housekeeping. Examples from the history:
-
-```
-feat(module): expose services.amarre.push.{enable,tokensPath,graceMs}
-feat(push): optional Expo push notifications (PROTOCOL 2.1.0)
-fix(broker): force every tool through canUseTool + supply updatedInput
-feat!: multi-session protocol (PROTOCOL v2.0.0)
-```
-
-Keep subjects under ~72 chars. No body required for small changes; reference PROTOCOL section + version on wire-format changes.
-
-### Key env vars cheat-sheet
-
-| Var                          | Default                       | Notes |
-| ---------------------------- | ----------------------------- | ----- |
-| `AMARRE_AGENT`               | `pi`                          | Adapter name → `agents/<name>/adapter.ts` |
-| `AMARRE_AGENT_PATH`          | —                             | Absolute module path; overrides `AMARRE_AGENT` (tests) |
-| `AMARRE_INSTANCES_JSON`      | —                             | Multi-instance config; non-empty array wins over legacy single-agent |
-| `AMARRE_HOST`                | `127.0.0.1`                   | Bind addr; keep on loopback |
-| `AMARRE_PORT`                | `8341`                        | TCP port |
-| `AMARRE_MAX_SESSIONS`        | `8`                           | Cap; `POST /sessions` returns 429 past this |
-| `PI_BIN`                     | `pi`                          | pi adapter |
-| `AMARRE_PI_GATE`             | `agents/pi/permission-gate.ts`| pi adapter extension path |
-| `CLAUDE_BIN`                 | `claude`                      | claude-code adapter |
-| `AMARRE_CLAUDE_BROKER`       | `agents/claude-code/broker.ts`| SDK broker entrypoint (Nix swaps in bundled `.js`) |
-| `AMARRE_CLAUDE_LEGACY=1`     | —                             | Use stream-json translator instead of SDK broker |
-| `AMARRE_CLAUDE_RAW=1`        | —                             | Raw stream-json passthrough; debugging |
-| `AMARRE_CLAUDE_MODEL`        | —                             | Forwarded to `claude --model` (raw/legacy modes) |
-| `AMARRE_BUN_BIN`             | `bun`                         | Used to spawn the broker |
-| `AMARRE_PUSH_TOKENS_PATH`    | —                             | Enables push when set; JSON token store |
-| `AMARRE_PUSH_GRACE_MS`       | `15000`                       | Wait before firing awaiting-input push |
-| `AMARRE_PUSH_EXPO_URL`       | Expo default                  | Override push endpoint |
-
+> Install amarre on a NixOS host with Tailscale enabled:
+>
+> 1. Add to flake inputs: `amarre.url = "github:nSimonFR/amarre";`
+> 2. Import `inputs.amarre.nixosModules.amarre` and configure:
+>    ```nix
+>    services.amarre = {
+>      enable = true;
+>      instances = {
+>        pi = { agent = "pi"; port = 4343; };
+>        # claude-code = { agent = "claude-code"; port = 4344; };
+>      };
+>    };
+>    ```
+> 3. `sudo nixos-rebuild switch --flake .#<host>`
+> 4. From a Tailscale-joined remote device, connect to `ws://<host>:<port>/` and send PROTOCOL frames per `docs/PROTOCOL.md`. The server is loopback-only by design; Tailscale ACLs are the trust boundary.
 ## Status
 
 v0.3 — multi-session, multi-client, tailnet-only (PROTOCOL.md v2.0.0). See `docs/PROTOCOL.md` §9 for planned extensions (state.json rehydrate, hello handshake, capability advertisement, auto-restart, push, binary media, multi-adapter-per-server).
