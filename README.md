@@ -104,6 +104,19 @@ services.amarre.instances = {
 
 The systemd unit runs as the configured user so it inherits home-dir agent config (`~/.pi/agent/{settings.json,models.json,extensions/}`, `~/.claude/`). Pair with `tailscale serve` to expose the loopback port over the tailnet at HTTPS. Optional Expo push notifications are gated by `services.amarre.push.enable` (PROTOCOL §13).
 
+### Optional: Remote Claude (claude.ai/code dual-control)
+
+When the `claude-code` adapter is enabled, amarre can mirror its sessions to `claude.ai/code` and the Anthropic mobile app — both surfaces drive the same SDK Query (PROTOCOL §14). amarre stays the primary control plane.
+
+```nix
+services.amarre.remoteClaude = {
+  enable    = true;
+  tokenPath = "/run/claude-oauth/token";   # default
+};
+```
+
+The token must be readable by `services.amarre.user`; the `claude-remote-control.service` (separately deployed) keeps it fresh.
+
 ## Adding an agent
 
 See [agents/README.md](./agents/README.md). Each adapter is a small TypeScript module that knows how to spawn one specific CLI agent in stdio-streaming mode.
